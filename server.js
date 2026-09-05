@@ -11,7 +11,7 @@ const PUBLIC_DIR = path.join(ROOT, "public");
 await loadLocalEnv(path.join(ROOT, ".env"));
 
 const PORT = Number(process.env.PORT) || 3000;
-const MAX_UPLOAD_BYTES = (Number(process.env.MAX_UPLOAD_MB) || 200) * 1024 * 1024;
+const MAX_UPLOAD_BYTES = (Number(process.env.MAX_AUDIO_UPLOAD_MB) || 200) * 1024 * 1024;
 const TRANSCRIPTION_MODEL = process.env.TRANSCRIPTION_MODEL || "gemini-3.5-transcribe";
 const LONG_AUDIO_MODEL = process.env.LONG_AUDIO_MODEL || "gemini-3.8-flash";
 const DOCUMENT_MODEL = process.env.DOCUMENT_MODEL || "gemini-3.8-flash";

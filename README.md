@@ -41,7 +41,7 @@ No package installation is required. Node.js 20 or newer provides the server, `f
 | `LONG_AUDIO_MODEL` | `gemini-3.8-flash` | Full transcription of recordings longer than 30 minutes |
 | `DOCUMENT_MODEL` | `gemini-3.8-flash` | Document generation |
 | `PORT` | `3000` | Local server port |
-| `MAX_UPLOAD_MB` | `200` | Maximum audio size accepted when creating a direct Gemini upload session |
+| `MAX_AUDIO_UPLOAD_MB` | `200` | Maximum audio size accepted when creating a direct Gemini upload session |
 
 Recordings up to 30 minutes use the dedicated transcription model with precise diarization and word timestamps. Longer recordings automatically use Gemini's long-audio understanding mode with timestamped speaker turns; timestamps and speaker separation are approximate in this mode.
 
