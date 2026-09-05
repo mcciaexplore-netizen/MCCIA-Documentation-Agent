@@ -9,6 +9,7 @@ const state = {
   recordingTimer: null,
   recordingUrl: "",
   durationPromise: null,
+  whisperConfigured: false,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -223,18 +224,28 @@ async function uploadRecording(file) {
     }),
   });
 
-  const response = await fetch(session.uploadUrl, {
-    method: "POST",
-    headers: {
-      "X-Goog-Upload-Offset": "0",
-      "X-Goog-Upload-Command": "upload, finalize",
-    },
-    body: file,
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload?.error?.message || `Audio upload failed (${response.status})`);
-  if (!payload?.file?.name) throw new Error("Gemini did not return an audio file reference.");
-  return payload.file.name;
+  const chunkSize = 3 * 1024 * 1024;
+  let completedFile = null;
+  for (let offset = 0; offset < file.size; offset += chunkSize) {
+    const end = Math.min(offset + chunkSize, file.size);
+    const final = end === file.size;
+    const percent = Math.round((end / file.size) * 100);
+    setBusy(true, "Uploading securely…", `Relaying the recording in safe chunks · ${percent}%`);
+    const result = await request("/api/uploads/chunk", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Upload-Url": session.uploadUrl,
+        "X-Upload-Offset": String(offset),
+        "X-Upload-Final": final ? "1" : "0",
+      },
+      body: file.slice(offset, end),
+    });
+    if (result.file) completedFile = result.file;
+  }
+
+  if (!completedFile?.name) throw new Error("Gemini did not return an audio file reference.");
+  return completedFile.name;
 }
 
 function renderMetadata(data) {
@@ -257,21 +268,37 @@ async function transcribe() {
     return;
   }
 
-  setBusy(true, "Uploading securely…", "Sending the recording directly to Gemini without storing it on Shruti.");
+  setBusy(true, "Preparing recording…", "Checking the file securely before transcription.");
   try {
     const durationSeconds = Number(await state.durationPromise) || 0;
-    const fileName = await uploadRecording(state.file);
-    const longRecording = durationSeconds > 30 * 60;
-    setBusy(
-      true,
-      longRecording ? "Transcribing long recording…" : "Listening carefully…",
-      longRecording ? "Processing the full recording with timestamped speaker turns. This can take several minutes." : "Separating speakers and preserving mixed-language speech.",
-    );
-    const data = await request("/api/transcribe", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fileName, filename: state.file.name, durationSeconds }),
-    });
+    const engine = $("#transcription-engine").value;
+    let data;
+    if (engine === "whisper") {
+      if (!state.whisperConfigured) throw new Error("Whisper needs an OPENAI_API_KEY in the Vercel environment.");
+      if (state.file.size > 4 * 1024 * 1024) throw new Error("Whisper fallback accepts files up to 4 MB on Vercel. Use Gemini for this longer recording.");
+      setBusy(true, "Transcribing with Whisper…", "Creating segment timestamps while preserving the spoken language.");
+      data = await request("/api/transcribe/whisper", {
+        method: "POST",
+        headers: {
+          "Content-Type": state.file.type || "application/octet-stream",
+          "X-File-Name": encodeURIComponent(state.file.name),
+        },
+        body: state.file,
+      });
+    } else {
+      const fileName = await uploadRecording(state.file);
+      const longRecording = durationSeconds > 30 * 60;
+      setBusy(
+        true,
+        longRecording ? "Transcribing long recording…" : "Listening carefully…",
+        longRecording ? "Processing the full recording with timestamped speaker turns. This can take several minutes." : "Separating speakers and preserving mixed-language speech.",
+      );
+      data = await request("/api/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileName, filename: state.file.name, durationSeconds }),
+      });
+    }
     state.transcription = data;
     $("#transcript").value = data.text;
     renderMetadata(data);
@@ -348,6 +375,10 @@ function reset() {
 async function checkHealth() {
   try {
     const data = await request("/api/health");
+    state.whisperConfigured = Boolean(data.whisperConfigured);
+    const whisperOption = $("#transcription-engine option[value='whisper']");
+    whisperOption.disabled = !state.whisperConfigured;
+    whisperOption.textContent = state.whisperConfigured ? "Whisper · up to 4 MB" : "Whisper · add OpenAI key";
     const element = $("#api-status");
     element.classList.toggle("ready", data.configured);
     element.classList.toggle("error", !data.configured);

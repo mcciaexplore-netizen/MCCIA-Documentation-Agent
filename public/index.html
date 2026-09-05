@@ -37,7 +37,7 @@
         <div class="panel active" id="step-1">
           <div class="panel-heading">
             <div><span class="kicker">STEP 01</span><h2>What should I create?</h2></div>
-            <p>Choose the output, then add your recording. Your Gemini key stays securely on the local server.</p>
+            <p>Choose the output, then add your recording. Your API keys stay securely on the server.</p>
           </div>
 
           <div class="document-types" role="radiogroup" aria-label="Document type">
@@ -49,6 +49,7 @@
 
           <div class="form-grid">
             <label class="field"><span>Document language</span><select id="output-language"><option>English</option><option>Hindi</option><option>Marathi</option></select></label>
+            <label class="field"><span>Transcription engine</span><select id="transcription-engine"><option value="gemini">Gemini · long recordings</option><option value="whisper">Whisper · up to 4 MB</option></select></label>
             <label class="field"><span>Extra instructions <em>optional</em></span><input id="custom-instructions" type="text" placeholder="e.g. Focus on field observations" maxlength="4000" /></label>
           </div>
 
@@ -112,6 +113,6 @@
     </main>
 
     <div class="toast" id="toast" role="alert"></div>
-    <script type="module" src="/app.js?v=5"></script>
+    <script type="module" src="/app.js?v=7"></script>
   </body>
 </html>

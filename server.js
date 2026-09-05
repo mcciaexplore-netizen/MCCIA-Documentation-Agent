@@ -2,7 +2,7 @@ import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { extractGeminiText, normalizeGeminiTranscription, normalizeLongAudioTranscript } from "./lib/core.js";
+import { extractGeminiText, normalizeGeminiTranscription, normalizeLongAudioTranscript, normalizeTranscription } from "./lib/core.js";
 import { AGENT_NAME, buildDocumentRequest, SYSTEM_PROMPT } from "./lib/prompts.js";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -16,6 +16,9 @@ const TRANSCRIPTION_MODEL = process.env.TRANSCRIPTION_MODEL || "gemini-3.5-trans
 const LONG_AUDIO_MODEL = process.env.LONG_AUDIO_MODEL || "gemini-3.8-flash";
 const DOCUMENT_MODEL = process.env.DOCUMENT_MODEL || "gemini-3.8-flash";
 const PRECISE_TRANSCRIPTION_LIMIT_SECONDS = 30 * 60;
+const MAX_RELAY_CHUNK_BYTES = 3.5 * 1024 * 1024;
+const MAX_WHISPER_BYTES = 4 * 1024 * 1024;
+const WHISPER_MODEL = process.env.WHISPER_MODEL || "whisper-1";
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const GEMINI_UPLOAD_BASE = "https://generativelanguage.googleapis.com/upload/v1beta";
 
@@ -58,6 +61,15 @@ function requireApiKey() {
     throw error;
   }
   return process.env.GEMINI_API_KEY;
+}
+
+function requireOpenAIKey() {
+  if (!process.env.OPENAI_API_KEY) {
+    const error = new Error("Whisper is not configured yet. Add OPENAI_API_KEY to the server environment.");
+    error.status = 503;
+    throw error;
+  }
+  return process.env.OPENAI_API_KEY;
 }
 
 async function geminiRequest(url, options = {}) {
@@ -146,6 +158,58 @@ async function createUploadSession(request, response) {
   const upload = normalizeUploadInput(input);
   const uploadUrl = await startGeminiUploadSession(upload);
   sendJson(response, 200, { uploadUrl });
+}
+
+function validateGeminiUploadUrl(value) {
+  let url;
+  try {
+    url = new URL(String(value || ""));
+  } catch {
+    const error = new Error("Invalid upload session.");
+    error.status = 400;
+    throw error;
+  }
+  if (url.protocol !== "https:" || url.hostname !== "generativelanguage.googleapis.com" || url.pathname !== "/upload/v1beta/files") {
+    const error = new Error("Upload session destination is not allowed.");
+    error.status = 400;
+    throw error;
+  }
+  return url.toString();
+}
+
+async function relayUploadChunk(request, response) {
+  const uploadUrl = validateGeminiUploadUrl(request.headers["x-upload-url"]);
+  const offset = Number(request.headers["x-upload-offset"]);
+  const final = request.headers["x-upload-final"] === "1";
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    const error = new Error("Invalid upload offset.");
+    error.status = 400;
+    throw error;
+  }
+
+  const chunk = await readBody(request, MAX_RELAY_CHUNK_BYTES);
+  if (!chunk.length) {
+    const error = new Error("Upload chunk is empty.");
+    error.status = 400;
+    throw error;
+  }
+
+  const uploadResponse = await fetch(uploadUrl, {
+    method: "POST",
+    headers: {
+      "Content-Length": String(chunk.length),
+      "X-Goog-Upload-Offset": String(offset),
+      "X-Goog-Upload-Command": final ? "upload, finalize" : "upload",
+    },
+    body: chunk,
+  });
+  const payload = await uploadResponse.json().catch(() => ({}));
+  if (!uploadResponse.ok) {
+    const error = new Error(payload?.error?.message || `Gemini upload failed (${uploadResponse.status}).`);
+    error.status = uploadResponse.status;
+    throw error;
+  }
+  sendJson(response, 200, { uploadedBytes: chunk.length, file: payload.file || null });
 }
 
 async function waitForGeminiFile(file) {
@@ -249,6 +313,54 @@ async function transcribe(request, response) {
   });
 }
 
+async function transcribeWithWhisper(request, response) {
+  const apiKey = requireOpenAIKey();
+  const mimeType = String(request.headers["content-type"] || "application/octet-stream").split(";")[0];
+  const encodedName = String(request.headers["x-file-name"] || "recording.webm");
+  let filename = "recording.webm";
+  try {
+    filename = path.basename(decodeURIComponent(encodedName));
+  } catch {
+    filename = path.basename(encodedName);
+  }
+
+  const audio = await readBody(request, MAX_WHISPER_BYTES);
+  if (!audio.length) {
+    const error = new Error("The uploaded audio file is empty.");
+    error.status = 400;
+    throw error;
+  }
+
+  const form = new FormData();
+  form.append("file", new Blob([audio], { type: mimeType }), filename);
+  form.append("model", WHISPER_MODEL);
+  form.append("response_format", "verbose_json");
+  form.append("timestamp_granularities[]", "segment");
+  const whisperResponse = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: form,
+  });
+  const payload = await whisperResponse.json().catch(() => ({}));
+  if (!whisperResponse.ok) {
+    const error = new Error(payload?.error?.message || `Whisper transcription failed (${whisperResponse.status}).`);
+    error.status = whisperResponse.status;
+    throw error;
+  }
+
+  const normalized = normalizeTranscription(payload);
+  if (!normalized.text) throw new Error("Whisper returned an empty transcript.");
+  sendJson(response, 200, {
+    ...normalized,
+    filename,
+    dominantLanguages: payload.language || "Detected by Whisper",
+    audioQuality: normalized.segments.length ? "Processable" : "Limited transcript detail",
+    model: WHISPER_MODEL,
+    transcriptionMode: "whisper-segment-timestamps",
+    provider: "OpenAI Whisper",
+  });
+}
+
 async function generateDocument(request, response) {
   const buffer = await readBody(request, 1024 * 1024);
   const input = parseJsonBody(buffer);
@@ -300,10 +412,11 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 200, {
         ok: true,
         configured: Boolean(process.env.GEMINI_API_KEY),
+        whisperConfigured: Boolean(process.env.OPENAI_API_KEY),
         agent: AGENT_NAME,
         provider: "Google Gemini",
         maxUploadMb: Math.round(MAX_UPLOAD_BYTES / 1024 / 1024),
-        models: { transcription: TRANSCRIPTION_MODEL, longAudio: LONG_AUDIO_MODEL, document: DOCUMENT_MODEL },
+        models: { transcription: TRANSCRIPTION_MODEL, longAudio: LONG_AUDIO_MODEL, whisper: WHISPER_MODEL, document: DOCUMENT_MODEL },
       });
       return;
     }
@@ -311,8 +424,16 @@ const server = http.createServer(async (request, response) => {
       await createUploadSession(request, response);
       return;
     }
+    if (request.method === "POST" && url.pathname === "/api/uploads/chunk") {
+      await relayUploadChunk(request, response);
+      return;
+    }
     if (request.method === "POST" && url.pathname === "/api/transcribe") {
       await transcribe(request, response);
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/transcribe/whisper") {
+      await transcribeWithWhisper(request, response);
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/generate") {

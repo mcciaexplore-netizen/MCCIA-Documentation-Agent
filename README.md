@@ -8,11 +8,12 @@ Shruti is a local, Google Gemini-powered multilingual documentation agent that t
 - In-browser microphone recording with a live timer and playback preview
 - Timestamped speaker diarization
 - Automatic long-audio mode for recordings over 30 minutes
+- Optional OpenAI Whisper transcription fallback for small recordings
 - Editable transcript review gate
 - Meeting minutes, reports, summaries, and template filling
 - English, Hindi, or Marathi document output
 - Markdown copy and download
-- Server-side Gemini API key; audio is uploaded directly from the browser through a temporary Gemini upload session and is not saved locally
+- Server-side Gemini API key; audio is relayed in small resumable chunks to Gemini and is not saved locally
 - Temporary Gemini Files API uploads are deleted immediately after transcription
 - Large recordings bypass Vercel's function request-body limit
 
@@ -37,8 +38,10 @@ No package installation is required. Node.js 20 or newer provides the server, `f
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `GEMINI_API_KEY` | required | Google Gemini API authentication |
+| `OPENAI_API_KEY` | optional | Enables the Whisper fallback for files up to 4 MB |
 | `TRANSCRIPTION_MODEL` | `gemini-3.5-transcribe` | Speaker-aware transcription with timestamps |
 | `LONG_AUDIO_MODEL` | `gemini-3.8-flash` | Full transcription of recordings longer than 30 minutes |
+| `WHISPER_MODEL` | `whisper-1` | OpenAI Whisper transcription fallback |
 | `DOCUMENT_MODEL` | `gemini-3.8-flash` | Document generation |
 | `PORT` | `3000` | Local server port |
 | `MAX_AUDIO_UPLOAD_MB` | `200` | Maximum audio size accepted when creating a direct Gemini upload session |
