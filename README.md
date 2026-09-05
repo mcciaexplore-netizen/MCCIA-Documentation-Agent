@@ -11,8 +11,9 @@ Shruti is a local, Google Gemini-powered multilingual documentation agent that t
 - Meeting minutes, reports, summaries, and template filling
 - English, Hindi, or Marathi document output
 - Markdown copy and download
-- Server-side Gemini API key; audio is not saved locally
+- Server-side Gemini API key; audio is uploaded directly from the browser through a temporary Gemini upload session and is not saved locally
 - Temporary Gemini Files API uploads are deleted immediately after transcription
+- Large recordings bypass Vercel's function request-body limit
 
 ## Run locally
 
@@ -38,7 +39,7 @@ No package installation is required. Node.js 20 or newer provides the server, `f
 | `TRANSCRIPTION_MODEL` | `gemini-3.5-transcribe` | Speaker-aware transcription with timestamps |
 | `DOCUMENT_MODEL` | `gemini-3.8-flash` | Document generation |
 | `PORT` | `3000` | Local server port |
-| `MAX_UPLOAD_MB` | `50` | Request-size guard |
+| `MAX_UPLOAD_MB` | `50` | Maximum audio size accepted when creating a direct Gemini upload session |
 
 ## Verify
 

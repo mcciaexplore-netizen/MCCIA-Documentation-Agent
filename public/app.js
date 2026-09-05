@@ -72,7 +72,9 @@ async function startRecording() {
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
     const mimeType = recordingMimeType();
-    const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    const recorderOptions = { audioBitsPerSecond: 48_000 };
+    if (mimeType) recorderOptions.mimeType = mimeType;
+    const recorder = new MediaRecorder(stream, recorderOptions);
     state.mediaStream = stream;
     state.recorder = recorder;
     state.recordingChunks = [];
@@ -184,6 +186,31 @@ async function request(url, options) {
   return payload;
 }
 
+async function uploadRecording(file) {
+  const session = await request("/api/uploads/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      filename: file.name,
+      mimeType: file.type || "application/octet-stream",
+      size: file.size,
+    }),
+  });
+
+  const response = await fetch(session.uploadUrl, {
+    method: "POST",
+    headers: {
+      "X-Goog-Upload-Offset": "0",
+      "X-Goog-Upload-Command": "upload, finalize",
+    },
+    body: file,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload?.error?.message || `Audio upload failed (${response.status})`);
+  if (!payload?.file?.name) throw new Error("Gemini did not return an audio file reference.");
+  return payload.file.name;
+}
+
 function renderMetadata(data) {
   const items = [
     ["Duration", data.durationLabel || "Unknown"],
@@ -204,15 +231,14 @@ async function transcribe() {
     return;
   }
 
-  setBusy(true, "Listening carefully…", "Separating speakers and preserving mixed-language speech.");
+  setBusy(true, "Uploading securely…", "Sending the recording directly to Gemini without storing it on Shruti.");
   try {
+    const fileName = await uploadRecording(state.file);
+    setBusy(true, "Listening carefully…", "Separating speakers and preserving mixed-language speech.");
     const data = await request("/api/transcribe", {
       method: "POST",
-      headers: {
-        "Content-Type": state.file.type || "application/octet-stream",
-        "X-File-Name": encodeURIComponent(state.file.name),
-      },
-      body: state.file,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileName, filename: state.file.name }),
     });
     state.transcription = data;
     $("#transcript").value = data.text;

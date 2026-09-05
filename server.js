@@ -78,7 +78,7 @@ async function geminiRequest(url, options = {}) {
   return payload;
 }
 
-async function uploadGeminiFile(audio, mimeType, filename) {
+async function startGeminiUploadSession({ mimeType, filename, size }) {
   const apiKey = requireApiKey();
   const startResponse = await fetch(`${GEMINI_UPLOAD_BASE}/files`, {
     method: "POST",
@@ -86,7 +86,7 @@ async function uploadGeminiFile(audio, mimeType, filename) {
       "x-goog-api-key": apiKey,
       "X-Goog-Upload-Protocol": "resumable",
       "X-Goog-Upload-Command": "start",
-      "X-Goog-Upload-Header-Content-Length": String(audio.length),
+      "X-Goog-Upload-Header-Content-Length": String(size),
       "X-Goog-Upload-Header-Content-Type": mimeType,
       "Content-Type": "application/json",
     },
@@ -102,23 +102,48 @@ async function uploadGeminiFile(audio, mimeType, filename) {
 
   const uploadUrl = startResponse.headers.get("x-goog-upload-url");
   if (!uploadUrl) throw new Error("Gemini did not return a resumable upload URL.");
+  return uploadUrl;
+}
 
-  const uploadResponse = await fetch(uploadUrl, {
-    method: "POST",
-    headers: {
-      "Content-Length": String(audio.length),
-      "X-Goog-Upload-Offset": "0",
-      "X-Goog-Upload-Command": "upload, finalize",
-    },
-    body: audio,
-  });
-  const payload = await uploadResponse.json().catch(() => ({}));
-  if (!uploadResponse.ok) {
-    const error = new Error(payload?.error?.message || `Gemini audio upload failed (${uploadResponse.status}).`);
-    error.status = uploadResponse.status;
+function parseJsonBody(buffer) {
+  try {
+    return JSON.parse(buffer.toString("utf8"));
+  } catch {
+    const error = new Error("Invalid JSON request.");
+    error.status = 400;
     throw error;
   }
-  return waitForGeminiFile(payload.file);
+}
+
+function normalizeUploadInput(input) {
+  const filename = path.basename(String(input?.filename || "recording.webm")).slice(0, 200);
+  const mimeType = String(input?.mimeType || "application/octet-stream").split(";")[0].slice(0, 100);
+  const size = Number(input?.size);
+  const supportedExtension = /\.(mp3|mpeg|mpga|m4a|wav|webm|ogg|flac|aac|aiff|opus)$/i.test(filename);
+
+  if (!Number.isSafeInteger(size) || size <= 0) {
+    const error = new Error("The uploaded audio file is empty or has an invalid size.");
+    error.status = 400;
+    throw error;
+  }
+  if (size > MAX_UPLOAD_BYTES) {
+    const error = new Error(`Recording exceeds the ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB limit.`);
+    error.status = 413;
+    throw error;
+  }
+  if (!mimeType.startsWith("audio/") && !supportedExtension) {
+    const error = new Error("Please choose a supported audio recording.");
+    error.status = 415;
+    throw error;
+  }
+  return { filename, mimeType, size };
+}
+
+async function createUploadSession(request, response) {
+  const input = parseJsonBody(await readBody(request, 32 * 1024));
+  const upload = normalizeUploadInput(input);
+  const uploadUrl = await startGeminiUploadSession(upload);
+  sendJson(response, 200, { uploadUrl });
 }
 
 async function waitForGeminiFile(file) {
@@ -154,33 +179,27 @@ async function generateWithGemini(model, body) {
 }
 
 async function transcribe(request, response) {
-  const mimeType = String(request.headers["content-type"] || "application/octet-stream").split(";")[0];
-  const encodedName = String(request.headers["x-file-name"] || "recording.webm");
-  let filename = "recording.webm";
-  try {
-    filename = path.basename(decodeURIComponent(encodedName));
-  } catch {
-    filename = path.basename(encodedName);
-  }
-
-  const audio = await readBody(request, MAX_UPLOAD_BYTES);
-  if (!audio.length) {
-    const error = new Error("The uploaded audio file is empty.");
+  const input = parseJsonBody(await readBody(request, 32 * 1024));
+  const fileName = String(input?.fileName || "");
+  const filename = path.basename(String(input?.filename || "recording.webm")).slice(0, 200);
+  if (!/^files\/[A-Za-z0-9_-]+$/.test(fileName)) {
+    const error = new Error("Gemini returned an invalid audio file reference.");
     error.status = 400;
     throw error;
   }
 
-  let uploadedFile;
+  let uploadedFile = { name: fileName };
   let raw;
   try {
-    uploadedFile = await uploadGeminiFile(audio, mimeType, filename);
+    uploadedFile = await geminiRequest(`${GEMINI_API_BASE}/${fileName}`);
+    uploadedFile = await waitForGeminiFile(uploadedFile);
     raw = await generateWithGemini(TRANSCRIPTION_MODEL, {
       contents: [{
         role: "user",
         parts: [{
           fileData: {
             fileUri: uploadedFile.uri,
-            mimeType: uploadedFile.mimeType || mimeType,
+            mimeType: uploadedFile.mimeType || "audio/webm",
           },
         }],
       }],
@@ -215,14 +234,7 @@ async function transcribe(request, response) {
 
 async function generateDocument(request, response) {
   const buffer = await readBody(request, 1024 * 1024);
-  let input;
-  try {
-    input = JSON.parse(buffer.toString("utf8"));
-  } catch {
-    const error = new Error("Invalid JSON request.");
-    error.status = 400;
-    throw error;
-  }
+  const input = parseJsonBody(buffer);
 
   if (!String(input.transcript || "").trim()) {
     const error = new Error("A transcript is required before generating a document.");
@@ -273,8 +285,13 @@ const server = http.createServer(async (request, response) => {
         configured: Boolean(process.env.GEMINI_API_KEY),
         agent: AGENT_NAME,
         provider: "Google Gemini",
+        maxUploadMb: Math.round(MAX_UPLOAD_BYTES / 1024 / 1024),
         models: { transcription: TRANSCRIPTION_MODEL, document: DOCUMENT_MODEL },
       });
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/uploads/start") {
+      await createUploadSession(request, response);
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/transcribe") {
