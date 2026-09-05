@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Shruti turns Hindi, English, Marathi, and mixed-language recordings into trustworthy professional documents." />
+    <title>Shruti — Audio to documents</title>
+    <link rel="stylesheet" href="/styles.css?v=2" />
+  </head>
+  <body>
+    <div class="grain" aria-hidden="true"></div>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Shruti home">
+        <span class="brand-mark" aria-hidden="true">श्रु</span>
+        <span>Shruti</span>
+      </a>
+      <div class="status" id="api-status"><span class="status-dot"></span><span>Checking setup…</span></div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <p class="eyebrow">MULTILINGUAL DOCUMENTATION AGENT</p>
+        <h1>From spoken nuance<br />to written clarity.</h1>
+        <p class="hero-copy">Hindi, English, Marathi—or all three in one room. Powered by Google Gemini, Shruti listens carefully and shapes the conversation into a document you can use.</p>
+        <div class="language-row" aria-label="Supported languages">
+          <span>हिंदी</span><i></i><span>English</span><i></i><span>मराठी</span>
+        </div>
+      </section>
+
+      <section class="workspace" aria-label="Document workflow">
+        <nav class="steps" aria-label="Progress">
+          <button class="step active" data-step="1"><span>01</span> Intake</button>
+          <button class="step" data-step="2" disabled><span>02</span> Review</button>
+          <button class="step" data-step="3" disabled><span>03</span> Document</button>
+        </nav>
+
+        <div class="panel active" id="step-1">
+          <div class="panel-heading">
+            <div><span class="kicker">STEP 01</span><h2>What should I create?</h2></div>
+            <p>Choose the output, then add your recording. Your Gemini key stays securely on the local server.</p>
+          </div>
+
+          <div class="document-types" role="radiogroup" aria-label="Document type">
+            <label class="type-card selected"><input type="radio" name="document-type" value="minutes" checked /><span class="type-icon">M</span><strong>Meeting minutes</strong><small>Topics, decisions, owners & deadlines</small></label>
+            <label class="type-card"><input type="radio" name="document-type" value="report" /><span class="type-icon">R</span><strong>Report</strong><small>Executive summary, findings & risks</small></label>
+            <label class="type-card"><input type="radio" name="document-type" value="summary" /><span class="type-icon">S</span><strong>Summary</strong><small>A faithful, shorter account</small></label>
+            <label class="type-card"><input type="radio" name="document-type" value="template" /><span class="type-icon">T</span><strong>Fill a template</strong><small>Keep your structure and formatting</small></label>
+          </div>
+
+          <div class="form-grid">
+            <label class="field"><span>Document language</span><select id="output-language"><option>English</option><option>Hindi</option><option>Marathi</option></select></label>
+            <label class="field"><span>Extra instructions <em>optional</em></span><input id="custom-instructions" type="text" placeholder="e.g. Focus on field observations" maxlength="4000" /></label>
+          </div>
+
+          <div class="template-area hidden" id="template-area">
+            <label class="field"><span>Paste your template</span><textarea id="template" rows="8" placeholder="Paste headings, tables, and placeholders here…"></textarea></label>
+            <fieldset class="blank-policy"><legend>If a section was not discussed</legend><label><input type="radio" name="blank-policy" value="not-discussed" checked /> Write “Not discussed in recording”</label><label><input type="radio" name="blank-policy" value="blank" /> Leave it blank</label></fieldset>
+          </div>
+
+          <section class="recorder" aria-label="Record audio">
+            <div class="recorder-copy">
+              <span class="recorder-icon" aria-hidden="true"></span>
+              <div><strong>Record in this browser</strong><span>Use your microphone for a new meeting or voice note.</span></div>
+            </div>
+            <div class="recorder-controls">
+              <span class="recording-time" id="recording-time" aria-live="polite">00:00</span>
+              <button class="record-button" id="record-button" type="button"><i></i><span>Start recording</span></button>
+              <button class="stop-button hidden" id="stop-button" type="button"><span></span>Stop</button>
+            </div>
+            <div class="recording-result hidden" id="recording-result">
+              <audio id="recording-preview" controls preload="metadata"></audio>
+              <button class="discard-button" id="discard-recording" type="button">Discard recording</button>
+            </div>
+          </section>
+
+          <div class="or-divider"><span>or upload a file</span></div>
+
+          <label class="upload-zone" id="upload-zone">
+            <input id="audio-file" type="file" accept="audio/*,.mp3,.mpeg,.mpga,.m4a,.wav,.webm,.ogg,.flac,.aac,.aiff,.opus" />
+            <span class="upload-glyph" aria-hidden="true">↑</span>
+            <strong id="upload-title">Drop a recording here</strong>
+            <span id="upload-detail">Click to choose MP3, M4A, WAV, WebM, OGG, or FLAC</span>
+          </label>
+
+          <div class="actions"><label class="switch"><input id="skip-review" type="checkbox" /><span></span> “Just do it” — skip transcript review</label><button class="primary" id="transcribe-button" disabled>Transcribe recording <span>→</span></button></div>
+        </div>
+
+        <div class="panel" id="step-2">
+          <div class="panel-heading">
+            <div><span class="kicker">STEP 02</span><h2>Quick transcript check</h2></div>
+            <p>Correct names, speakers, or terms here. Everything in the document will be grounded in this transcript.</p>
+          </div>
+          <div class="metadata" id="metadata"></div>
+          <label class="field transcript-field"><span>Timestamped transcript</span><textarea id="transcript" spellcheck="false"></textarea></label>
+          <div class="speaker-map" id="speaker-map"></div>
+          <div class="actions right"><button class="secondary" data-back="1">← Back</button><button class="primary" id="generate-button">Generate document <span>→</span></button></div>
+        </div>
+
+        <div class="panel" id="step-3">
+          <div class="panel-heading">
+            <div><span class="kicker">STEP 03</span><h2>Your document is ready</h2></div>
+            <p>Review the result, then copy or download it as Markdown.</p>
+          </div>
+          <div class="document-toolbar"><span id="document-model"></span><div><button class="text-button" id="copy-button">Copy</button><button class="text-button" id="download-button">Download .md</button></div></div>
+          <article class="document-output" id="document-output"></article>
+          <div class="follow-ups"><p>I can also:</p><div><button data-followup="translate">1) Translate into Hindi / Marathi / English</button><button data-followup="executive">2) Create a shorter executive version</button><button data-followup="email">3) Draft the email to attendees</button></div></div>
+          <div class="actions"><button class="secondary" id="new-recording">＋ New recording</button></div>
+        </div>
+
+        <div class="busy-overlay hidden" id="busy" role="status" aria-live="polite"><div class="wave"><i></i><i></i><i></i><i></i><i></i></div><strong id="busy-title">Listening carefully…</strong><span id="busy-detail">Keeping Hindi, English, and Marathi exactly as spoken.</span></div>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="alert"></div>
+    <script type="module" src="/app.js?v=3"></script>
+  </body>
+</html>

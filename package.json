@@ -1,0 +1,15 @@
+{
+  "name": "shruti-documentation-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Multilingual audio-to-document agent for Hindi, English, Marathi, and mixed speech.",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
