@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { extractGeminiText, extractResponseText, formatTimestamp, normalizeGeminiTranscription, normalizeTranscription, safeDownloadName } from "../lib/core.js";
+import { extractGeminiText, extractResponseText, formatTimestamp, normalizeGeminiTranscription, normalizeLongAudioTranscript, normalizeTranscription, safeDownloadName } from "../lib/core.js";
 
 test("formatTimestamp produces full HH:MM:SS timestamps", () => {
   assert.equal(formatTimestamp(0), "00:00:00");
@@ -52,6 +52,14 @@ test("normalizeGeminiTranscription maps annotated speaker turns", () => {
 
 test("extractGeminiText joins model text parts", () => {
   assert.equal(extractGeminiText({ candidates: [{ content: { parts: [{ text: "One" }, { text: "Two" }] } }] }), "One\nTwo");
+});
+
+test("normalizeLongAudioTranscript preserves timestamped speaker turns", () => {
+  const result = normalizeLongAudioTranscript("[00:00:03] Speaker 1: नमस्ते Aarushi\n[01:02:04] Speaker 2: Q3 budget approve किया.", 5400);
+  assert.equal(result.durationLabel, "01:30:00");
+  assert.equal(result.speakerCount, 2);
+  assert.equal(result.segments[1].start, 3724);
+  assert.match(result.plainText, /Q3 budget approve किया/);
 });
 
 test("safeDownloadName removes unsafe filename characters", () => {

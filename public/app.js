@@ -8,6 +8,7 @@ const state = {
   recordingStartedAt: 0,
   recordingTimer: null,
   recordingUrl: "",
+  durationPromise: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -29,6 +30,25 @@ function recordingExtension(type) {
 function formatRecordingTime(milliseconds) {
   const seconds = Math.max(0, Math.floor(milliseconds / 1000));
   return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function readAudioDuration(file) {
+  return new Promise((resolve) => {
+    const audio = document.createElement("audio");
+    const url = URL.createObjectURL(file);
+    let settled = false;
+    const finish = (duration = 0) => {
+      if (settled) return;
+      settled = true;
+      URL.revokeObjectURL(url);
+      resolve(Number.isFinite(duration) ? duration : 0);
+    };
+    audio.preload = "metadata";
+    audio.addEventListener("loadedmetadata", () => finish(audio.duration), { once: true });
+    audio.addEventListener("error", () => finish(), { once: true });
+    setTimeout(() => finish(), 8000);
+    audio.src = url;
+  });
 }
 
 function releaseMicrophone() {
@@ -122,7 +142,7 @@ function finishRecording() {
   const blob = new Blob(state.recordingChunks, { type });
   const timestamp = new Date().toISOString().replaceAll(":", "-").replace(/\.\d{3}Z$/, "Z");
   const file = new File([blob], `shruti-recording-${timestamp}.${recordingExtension(type)}`, { type });
-  chooseFile(file);
+  chooseFile(file, elapsed / 1000);
 
   state.recordingUrl = URL.createObjectURL(blob);
   $("#recording-preview").src = state.recordingUrl;
@@ -155,7 +175,7 @@ function goToStep(step) {
   $(".workspace").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function chooseFile(file) {
+function chooseFile(file, knownDuration = 0) {
   if (!file) return;
   const supported = file.type.startsWith("audio/") || /\.(mp3|mpeg|mpga|m4a|wav|webm|ogg|flac|aac|aiff|opus)$/i.test(file.name);
   if (!supported) {
@@ -163,10 +183,16 @@ function chooseFile(file) {
     return;
   }
   state.file = file;
+  state.durationPromise = knownDuration > 0 ? Promise.resolve(knownDuration) : readAudioDuration(file);
   uploadZone.classList.add("has-file");
   $("#upload-title").textContent = file.name;
   $("#upload-detail").textContent = `${(file.size / 1024 / 1024).toFixed(1)} MB · Ready to transcribe`;
   transcribeButton.disabled = false;
+  const selectedFile = file;
+  state.durationPromise.then((duration) => {
+    if (state.file !== selectedFile || !duration) return;
+    $("#upload-detail").textContent = `${(file.size / 1024 / 1024).toFixed(1)} MB · ${formatRecordingTime(duration * 1000)} · Ready to transcribe`;
+  });
 }
 
 function formValues() {
@@ -233,12 +259,18 @@ async function transcribe() {
 
   setBusy(true, "Uploading securely…", "Sending the recording directly to Gemini without storing it on Shruti.");
   try {
+    const durationSeconds = Number(await state.durationPromise) || 0;
     const fileName = await uploadRecording(state.file);
-    setBusy(true, "Listening carefully…", "Separating speakers and preserving mixed-language speech.");
+    const longRecording = durationSeconds > 30 * 60;
+    setBusy(
+      true,
+      longRecording ? "Transcribing long recording…" : "Listening carefully…",
+      longRecording ? "Processing the full recording with timestamped speaker turns. This can take several minutes." : "Separating speakers and preserving mixed-language speech.",
+    );
     const data = await request("/api/transcribe", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fileName, filename: state.file.name }),
+      body: JSON.stringify({ fileName, filename: state.file.name, durationSeconds }),
     });
     state.transcription = data;
     $("#transcript").value = data.text;
@@ -302,6 +334,7 @@ function reset() {
   state.file = null;
   state.transcription = null;
   state.document = "";
+  state.durationPromise = null;
   fileInput.value = "";
   $("#transcript").value = "";
   $("#document-output").textContent = "";
