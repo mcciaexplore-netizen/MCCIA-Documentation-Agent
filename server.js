@@ -21,6 +21,10 @@ const LONG_AUDIO_FALLBACK_MODELS = String(process.env.LONG_AUDIO_FALLBACK_MODELS
   .map((model) => model.trim())
   .filter(Boolean);
 const DOCUMENT_MODEL = process.env.DOCUMENT_MODEL || "gemini-3.8-flash";
+const DOCUMENT_FALLBACK_MODELS = String(process.env.DOCUMENT_FALLBACK_MODELS || "gemini-3.7-flash,gemini-2.5-flash")
+  .split(",")
+  .map((model) => model.trim())
+  .filter(Boolean);
 const PRECISE_TRANSCRIPTION_LIMIT_SECONDS = 30 * 60;
 const GEMINI_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
 const MAX_WHISPER_BYTES = 4 * 1024 * 1024;
@@ -105,7 +109,15 @@ async function geminiRequest(url, options = {}) {
 }
 
 function isRetryableGeminiError(error) {
-  return [408, 429, 500, 502, 503, 504].includes(Number(error?.status));
+  return [408, 429, 500, 502, 503, 504].includes(Number(error?.status)) && !isGeminiQuotaError(error);
+}
+
+function isGeminiQuotaError(error) {
+  return Number(error?.status) === 429 && /quota exceeded/i.test(String(error?.message || ""));
+}
+
+function canFallbackFromGeminiError(error) {
+  return isRetryableGeminiError(error) || isGeminiQuotaError(error) || Number(error?.status) === 404;
 }
 
 function retryDelayMs(attempt, retryAfterMs) {
@@ -400,8 +412,8 @@ async function generateWithGemini(model, body, attempts = 4) {
   );
 }
 
-async function generateLongAudioWithFallback(body) {
-  const models = [...new Set([LONG_AUDIO_MODEL, ...LONG_AUDIO_FALLBACK_MODELS])];
+async function generateWithGeminiFallback(primaryModel, fallbackModels, body, operationLabel) {
+  const models = [...new Set([primaryModel, ...fallbackModels])];
   let lastError;
 
   for (let index = 0; index < models.length; index += 1) {
@@ -411,12 +423,15 @@ async function generateLongAudioWithFallback(body) {
       return { raw, model };
     } catch (error) {
       lastError = error;
-      if (!isRetryableGeminiError(error)) throw error;
+      if (!canFallbackFromGeminiError(error)) throw error;
       if (index < models.length - 1) console.warn(`Gemini model ${model} stayed busy; trying ${models[index + 1]}.`);
     }
   }
 
-  const error = new Error("Gemini is temporarily busy after several automatic retries. Your recording uploaded successfully, but transcription could not start. Please try again in a few minutes.");
+  const detail = isGeminiQuotaError(lastError)
+    ? `All configured Gemini models have reached their current quota for ${operationLabel}. Please wait for the quota to reset or add billing to the Gemini project.`
+    : `Gemini is temporarily busy after several automatic retries, so ${operationLabel} could not finish. Please try again in a few minutes.`;
+  const error = new Error(detail);
   error.status = Number(lastError?.status) || 503;
   throw error;
 }
@@ -463,7 +478,7 @@ async function transcribe(request, response) {
           }],
           generationConfig: { maxOutputTokens: 65_536 },
         };
-      const result = await generateLongAudioWithFallback(requestBody);
+      const result = await generateWithGeminiFallback(LONG_AUDIO_MODEL, LONG_AUDIO_FALLBACK_MODELS, requestBody, "transcription");
       raw = result.raw;
       transcriptionModel = result.model;
     } else {
@@ -561,15 +576,14 @@ async function generateDocument(request, response) {
     throw error;
   }
 
-  const raw = await generateWithGemini(DOCUMENT_MODEL, {
+  const result = await generateWithGeminiFallback(DOCUMENT_MODEL, DOCUMENT_FALLBACK_MODELS, {
     systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
     contents: [{ role: "user", parts: [{ text: buildDocumentRequest(input) }] }],
-    generationConfig: { temperature: 0.2 },
-  });
+  }, "document generation");
 
-  const document = extractGeminiText(raw);
+  const document = extractGeminiText(result.raw);
   if (!document) throw new Error("The model returned no document text.");
-  sendJson(response, 200, { document, model: DOCUMENT_MODEL, provider: "Google Gemini" });
+  sendJson(response, 200, { document, model: result.model, provider: "Google Gemini" });
 }
 
 async function serveStatic(request, response, pathname) {
@@ -608,7 +622,8 @@ const server = http.createServer(async (request, response) => {
         agent: AGENT_NAME,
         provider: "Google Gemini",
         maxUploadMb: Math.round(MAX_UPLOAD_BYTES / 1024 / 1024),
-        models: { transcription: TRANSCRIPTION_MODEL, longAudio: LONG_AUDIO_MODEL, longAudioFallbacks: LONG_AUDIO_FALLBACK_MODELS, whisper: WHISPER_MODEL, document: DOCUMENT_MODEL },
+        models: { transcription: TRANSCRIPTION_MODEL, longAudio: LONG_AUDIO_MODEL, longAudioFallbacks: LONG_AUDIO_FALLBACK_MODELS, whisper: WHISPER_MODEL, document: DOCUMENT_MODEL, documentFallbacks: DOCUMENT_FALLBACK_MODELS },
+        release: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || "local",
       });
       return;
     }

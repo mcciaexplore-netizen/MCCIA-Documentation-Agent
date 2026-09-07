@@ -165,6 +165,10 @@ function toast(message, error = false) {
 }
 
 function setBusy(active, title, detail) {
+  if (active) {
+    clearTimeout(toast.timer);
+    $("#toast").classList.remove("show");
+  }
   $("#busy-title").textContent = title || "Working carefully…";
   $("#busy-detail").textContent = detail || "This may take a moment.";
   $("#busy").classList.toggle("hidden", !active);
@@ -290,7 +294,8 @@ async function transcribe() {
     $("#transcript").value = data.text;
     renderMetadata(data);
     if ($("#skip-review").checked) {
-      await generate();
+      const generated = await generate();
+      if (!generated) goToStep(2);
     } else {
       goToStep(2);
     }
@@ -327,8 +332,10 @@ async function generate() {
     $("#document-output").textContent = data.document;
     $("#document-model").textContent = `Generated with ${data.provider || "Google Gemini"} · ${data.model}`;
     goToStep(3);
+    return true;
   } catch (error) {
     toast(error.message, true);
+    return false;
   } finally {
     setBusy(false);
   }

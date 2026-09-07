@@ -6652,6 +6652,10 @@ ${newlined}
     toast.timer = setTimeout(() => element.classList.remove("show"), 3200);
   }
   function setBusy(active, title, detail) {
+    if (active) {
+      clearTimeout(toast.timer);
+      $("#toast").classList.remove("show");
+    }
     $("#busy-title").textContent = title || "Working carefully\u2026";
     $("#busy-detail").textContent = detail || "This may take a moment.";
     $("#busy").classList.toggle("hidden", !active);
@@ -6769,7 +6773,8 @@ ${newlined}
       $("#transcript").value = data.text;
       renderMetadata(data);
       if ($("#skip-review").checked) {
-        await generate();
+        const generated = await generate();
+        if (!generated) goToStep(2);
       } else {
         goToStep(2);
       }
@@ -6804,8 +6809,10 @@ ${newlined}
       $("#document-output").textContent = data.document;
       $("#document-model").textContent = `Generated with ${data.provider || "Google Gemini"} \xB7 ${data.model}`;
       goToStep(3);
+      return true;
     } catch (error) {
       toast(error.message, true);
+      return false;
     } finally {
       setBusy(false);
     }
