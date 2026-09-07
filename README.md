@@ -35,14 +35,14 @@ Shruti is a local, Google Gemini-powered multilingual documentation agent that t
 
 To record directly, choose **Start recording** and allow microphone access for `localhost`. Stop and preview the recording before sending it for transcription. The recording stays in browser memory until **Transcribe recording** is selected; the server does not save it to disk.
 
-Node.js 20 or newer is required. Production also needs a private Vercel Blob store connected to the project so Vercel supplies `BLOB_READ_WRITE_TOKEN`.
+Node.js 20 or newer is required. Production also needs a private Vercel Blob store connected to the project. New Vercel projects use short-lived OIDC credentials automatically; `BLOB_READ_WRITE_TOKEN` remains available for legacy and local setups.
 
 ## Configuration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `GEMINI_API_KEY` | required | Google Gemini API authentication |
-| `BLOB_READ_WRITE_TOKEN` | required in production | Private client uploads for recordings larger than Vercel's function limit |
+| `BLOB_READ_WRITE_TOKEN` | optional legacy/local auth | Private client uploads outside Vercel's OIDC environment |
 | `OPENAI_API_KEY` | optional | Enables the Whisper fallback for files up to 4 MB |
 | `TRANSCRIPTION_MODEL` | `gemini-3.5-transcribe` | Speaker-aware transcription with timestamps |
 | `LONG_AUDIO_MODEL` | `gemini-3.8-flash` | Full transcription of recordings longer than 30 minutes |

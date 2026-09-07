@@ -2,8 +2,8 @@ import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { del, get } from "@vercel/blob";
-import { handleUpload } from "@vercel/blob/client";
+import { del, get, issueSignedToken } from "@vercel/blob";
+import { handleUpload, handleUploadPresigned } from "@vercel/blob/client";
 import { extractGeminiText, normalizeGeminiTranscription, normalizeLongAudioTranscript, normalizeTranscription } from "./lib/core.js";
 import { AGENT_NAME, buildDocumentRequest, SYSTEM_PROMPT } from "./lib/prompts.js";
 
@@ -156,35 +156,71 @@ function normalizeUploadInput(input) {
 }
 
 function requireBlobStorage() {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+  if (!blobUploadMode()) {
     const error = new Error("Large-file storage is not configured. Connect a private Vercel Blob store to this project.");
     error.status = 503;
     throw error;
   }
 }
 
+function blobUploadMode() {
+  if (process.env.BLOB_READ_WRITE_TOKEN) return "token";
+  if (process.env.BLOB_STORE_ID && process.env.BLOB_WEBHOOK_PUBLIC_KEY) return "oidc";
+  return "";
+}
+
+function validateBlobPath(pathname) {
+  const normalizedPath = String(pathname || "").replace(/\\/g, "/");
+  if (!/^recordings\/[^/]+\.(mp3|mpeg|mpga|m4a|wav|webm|ogg|flac|aac|aiff|opus)$/i.test(normalizedPath)) {
+    const error = new Error("Unsupported recording filename.");
+    error.status = 415;
+    throw error;
+  }
+  return normalizedPath;
+}
+
 async function createBlobUploadToken(request, response) {
   requireBlobStorage();
   const body = parseJsonBody(await readBody(request, 64 * 1024));
-  const result = await handleUpload({
-    request,
-    body,
-    onBeforeGenerateToken: async (pathname) => {
-      const normalizedPath = String(pathname || "").replace(/\\/g, "/");
-      if (!/^recordings\/[^/]+\.(mp3|mpeg|mpga|m4a|wav|webm|ogg|flac|aac|aiff|opus)$/i.test(normalizedPath)) {
-        const error = new Error("Unsupported recording filename.");
-        error.status = 415;
-        throw error;
-      }
-      return {
-        allowedContentTypes: ["audio/*", "video/webm", "application/ogg", "application/octet-stream"],
-        maximumSizeInBytes: MAX_UPLOAD_BYTES,
-        addRandomSuffix: true,
-        cacheControlMaxAge: 60,
-      };
-    },
-    onUploadCompleted: async () => {},
-  });
+  const allowedContentTypes = ["audio/*", "video/webm", "application/ogg", "application/octet-stream"];
+  const result = blobUploadMode() === "oidc"
+    ? await handleUploadPresigned({
+        request,
+        body,
+        getSignedToken: async (pathname) => {
+          const safePath = validateBlobPath(pathname);
+          const validUntil = Date.now() + 60 * 60 * 1000;
+          return {
+            token: await issueSignedToken({
+              pathname: safePath,
+              operations: ["put"],
+              allowedContentTypes,
+              maximumSizeInBytes: MAX_UPLOAD_BYTES,
+              validUntil,
+            }),
+            urlOptions: {
+              allowedContentTypes,
+              maximumSizeInBytes: MAX_UPLOAD_BYTES,
+              validUntil,
+              addRandomSuffix: true,
+              cacheControlMaxAge: 60,
+            },
+          };
+        },
+      })
+    : await handleUpload({
+        request,
+        body,
+        onBeforeGenerateToken: async (pathname) => {
+          validateBlobPath(pathname);
+          return {
+            allowedContentTypes,
+            maximumSizeInBytes: MAX_UPLOAD_BYTES,
+            addRandomSuffix: true,
+            cacheControlMaxAge: 60,
+          };
+        },
+      });
   sendJson(response, 200, result);
 }
 
@@ -500,7 +536,8 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 200, {
         ok: true,
         configured: Boolean(process.env.GEMINI_API_KEY),
-        blobConfigured: Boolean(process.env.BLOB_READ_WRITE_TOKEN),
+        blobConfigured: Boolean(blobUploadMode()),
+        blobUploadMode: blobUploadMode(),
         whisperConfigured: Boolean(process.env.OPENAI_API_KEY),
         agent: AGENT_NAME,
         provider: "Google Gemini",

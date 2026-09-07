@@ -6517,7 +6517,8 @@ ${newlined}
     recordingUrl: "",
     durationPromise: null,
     whisperConfigured: false,
-    blobConfigured: false
+    blobConfigured: false,
+    blobUploadMode: ""
   };
   var $ = (selector) => document.querySelector(selector);
   var $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -6703,7 +6704,8 @@ ${newlined}
       throw new Error("Large-file storage is not configured. Connect a private Vercel Blob store to this project, then redeploy.");
     }
     const safeName = file.name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+/, "") || "recording.webm";
-    const blob = await upload(`recordings/${safeName}`, file, {
+    const uploadRecordingFile = state.blobUploadMode === "oidc" ? uploadPresigned : upload;
+    const blob = await uploadRecordingFile(`recordings/${safeName}`, file, {
       access: "private",
       handleUploadUrl: "/api/uploads/blob-token",
       multipart: file.size > 5 * 1024 * 1024,
@@ -6831,6 +6833,7 @@ ${newlined}
       const data = await request("/api/health");
       state.whisperConfigured = Boolean(data.whisperConfigured);
       state.blobConfigured = Boolean(data.blobConfigured);
+      state.blobUploadMode = data.blobUploadMode || "";
       const whisperOption = $("#transcription-engine option[value='whisper']");
       whisperOption.disabled = !state.whisperConfigured;
       whisperOption.textContent = state.whisperConfigured ? "Whisper \xB7 up to 4 MB" : "Whisper \xB7 add OpenAI key";
