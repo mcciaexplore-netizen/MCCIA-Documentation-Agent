@@ -1,6 +1,6 @@
-# MCCIA Shruti
+# MCCIA Documentation Agent
 
-MCCIA Shruti is a Google Gemini-powered multilingual documentation agent for the Mahratta Chamber of Commerce, Industries and Agriculture. It turns Hindi, English, Marathi, and code-mixed recordings into grounded Chamber documents.
+The MCCIA Documentation Agent is a Google Gemini-powered multilingual documentation tool for the Mahratta Chamber of Commerce, Industries and Agriculture. It turns Hindi, English, Marathi, and code-mixed recordings into grounded Chamber documents.
 
 ## Current MVP
 
