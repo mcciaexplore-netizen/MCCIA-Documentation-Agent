@@ -278,7 +278,7 @@ async function transcribe() {
       setBusy(
         true,
         longRecording ? "Transcribing long recording…" : "Listening carefully…",
-        longRecording ? "Processing the full recording with timestamped speaker turns. This can take several minutes." : "Separating speakers and preserving mixed-language speech.",
+        longRecording ? "Processing the full recording with timestamped speaker turns. If Gemini is busy, MCCIA will retry automatically and use backup capacity." : "Separating speakers and preserving mixed-language speech.",
       );
       data = await request("/api/transcribe", {
         method: "POST",

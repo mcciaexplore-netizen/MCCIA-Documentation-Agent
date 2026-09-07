@@ -16,6 +16,10 @@ const PORT = Number(process.env.PORT) || 3000;
 const MAX_UPLOAD_BYTES = (Number(process.env.MAX_AUDIO_UPLOAD_MB) || 200) * 1024 * 1024;
 const TRANSCRIPTION_MODEL = process.env.TRANSCRIPTION_MODEL || "gemini-3.5-transcribe";
 const LONG_AUDIO_MODEL = process.env.LONG_AUDIO_MODEL || "gemini-3.8-flash";
+const LONG_AUDIO_FALLBACK_MODELS = String(process.env.LONG_AUDIO_FALLBACK_MODELS || "gemini-3.7-flash,gemini-2.5-flash")
+  .split(",")
+  .map((model) => model.trim())
+  .filter(Boolean);
 const DOCUMENT_MODEL = process.env.DOCUMENT_MODEL || "gemini-3.8-flash";
 const PRECISE_TRANSCRIPTION_LIMIT_SECONDS = 30 * 60;
 const GEMINI_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
@@ -89,9 +93,41 @@ async function geminiRequest(url, options = {}) {
     const message = payload?.error?.message || `Gemini request failed with status ${response.status}.`;
     const error = new Error(message);
     error.status = response.status;
+    const retryAfter = response.headers.get("retry-after");
+    if (retryAfter) {
+      const seconds = Number(retryAfter);
+      const dateDelay = Date.parse(retryAfter) - Date.now();
+      error.retryAfterMs = Number.isFinite(seconds) ? seconds * 1000 : Math.max(0, dateDelay);
+    }
     throw error;
   }
   return payload;
+}
+
+function isRetryableGeminiError(error) {
+  return [408, 429, 500, 502, 503, 504].includes(Number(error?.status));
+}
+
+function retryDelayMs(attempt, retryAfterMs) {
+  if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) return Math.min(retryAfterMs, 10_000);
+  const exponentialDelay = Math.min(1000 * (2 ** attempt), 8000);
+  return exponentialDelay + Math.floor(Math.random() * 350);
+}
+
+async function withGeminiRetry(operation, attempts = 4) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableGeminiError(error) || attempt === attempts - 1) throw error;
+      const delay = retryDelayMs(attempt, error.retryAfterMs);
+      console.warn(`Gemini is temporarily unavailable (${error.status}); retrying in ${delay} ms.`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw lastError;
 }
 
 async function startGeminiUploadSession({ mimeType, filename, size }) {
@@ -336,7 +372,7 @@ async function waitForGeminiFile(file) {
 
   while (current.state === "PROCESSING" && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    current = await geminiRequest(`${GEMINI_API_BASE}/${current.name}`);
+    current = await withGeminiRetry(() => geminiRequest(`${GEMINI_API_BASE}/${current.name}`), 3);
   }
 
   if (current.state === "FAILED") throw new Error("Gemini could not process the uploaded recording.");
@@ -353,12 +389,36 @@ async function deleteGeminiFile(file) {
   }
 }
 
-async function generateWithGemini(model, body) {
-  return geminiRequest(`${GEMINI_API_BASE}/models/${encodeURIComponent(model)}:generateContent`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+async function generateWithGemini(model, body, attempts = 4) {
+  return withGeminiRetry(
+    () => geminiRequest(`${GEMINI_API_BASE}/models/${encodeURIComponent(model)}:generateContent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    attempts,
+  );
+}
+
+async function generateLongAudioWithFallback(body) {
+  const models = [...new Set([LONG_AUDIO_MODEL, ...LONG_AUDIO_FALLBACK_MODELS])];
+  let lastError;
+
+  for (let index = 0; index < models.length; index += 1) {
+    const model = models[index];
+    try {
+      const raw = await generateWithGemini(model, body, index === 0 ? 4 : 2);
+      return { raw, model };
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableGeminiError(error)) throw error;
+      if (index < models.length - 1) console.warn(`Gemini model ${model} stayed busy; trying ${models[index + 1]}.`);
+    }
+  }
+
+  const error = new Error("Gemini is temporarily busy after several automatic retries. Your recording uploaded successfully, but transcription could not start. Please try again in a few minutes.");
+  error.status = Number(lastError?.status) || 503;
+  throw error;
 }
 
 async function transcribe(request, response) {
@@ -377,12 +437,13 @@ async function transcribe(request, response) {
 
   let uploadedFile = null;
   let raw;
+  let transcriptionModel = TRANSCRIPTION_MODEL;
   try {
     uploadedFile = blobUrl
       ? await uploadBlobToGemini(blobUrl, filename, mimeType)
       : { name: fileName };
     fileName = uploadedFile.name;
-    uploadedFile = await geminiRequest(`${GEMINI_API_BASE}/${fileName}`);
+    uploadedFile = await withGeminiRetry(() => geminiRequest(`${GEMINI_API_BASE}/${fileName}`), 3);
     uploadedFile = await waitForGeminiFile(uploadedFile);
     if (!durationSeconds && Number(uploadedFile.sizeBytes) > 12 * 1024 * 1024) isLongRecording = true;
     const filePart = {
@@ -391,8 +452,8 @@ async function transcribe(request, response) {
         mimeType: uploadedFile.mimeType || "audio/webm",
       },
     };
-    raw = isLongRecording
-      ? await generateWithGemini(LONG_AUDIO_MODEL, {
+    if (isLongRecording) {
+      const requestBody = {
           contents: [{
             role: "user",
             parts: [
@@ -400,9 +461,13 @@ async function transcribe(request, response) {
               filePart,
             ],
           }],
-          generationConfig: { temperature: 0.1, maxOutputTokens: 65_536 },
-        })
-      : await generateWithGemini(TRANSCRIPTION_MODEL, {
+          generationConfig: { maxOutputTokens: 65_536 },
+        };
+      const result = await generateLongAudioWithFallback(requestBody);
+      raw = result.raw;
+      transcriptionModel = result.model;
+    } else {
+      raw = await generateWithGemini(TRANSCRIPTION_MODEL, {
           contents: [{ role: "user", parts: [filePart] }],
           generationConfig: {
             audioTranscriptionConfig: {
@@ -413,6 +478,7 @@ async function transcribe(request, response) {
             },
           },
         });
+    }
   } finally {
     if (uploadedFile) await deleteGeminiFile(uploadedFile);
     if (blobUrl) await deletePrivateBlob(blobUrl);
@@ -431,7 +497,7 @@ async function transcribe(request, response) {
     filename,
     dominantLanguages,
     audioQuality: normalized.segments.length ? "Processable" : "Limited transcript detail",
-    model: isLongRecording ? LONG_AUDIO_MODEL : TRANSCRIPTION_MODEL,
+    model: transcriptionModel,
     transcriptionMode: isLongRecording ? "long-audio" : "precise-diarization",
     provider: "Google Gemini",
   });
@@ -542,7 +608,7 @@ const server = http.createServer(async (request, response) => {
         agent: AGENT_NAME,
         provider: "Google Gemini",
         maxUploadMb: Math.round(MAX_UPLOAD_BYTES / 1024 / 1024),
-        models: { transcription: TRANSCRIPTION_MODEL, longAudio: LONG_AUDIO_MODEL, whisper: WHISPER_MODEL, document: DOCUMENT_MODEL },
+        models: { transcription: TRANSCRIPTION_MODEL, longAudio: LONG_AUDIO_MODEL, longAudioFallbacks: LONG_AUDIO_FALLBACK_MODELS, whisper: WHISPER_MODEL, document: DOCUMENT_MODEL },
       });
       return;
     }

@@ -46,12 +46,13 @@ Node.js 20 or newer is required. Production also needs a private Vercel Blob sto
 | `OPENAI_API_KEY` | optional | Enables the Whisper fallback for files up to 4 MB |
 | `TRANSCRIPTION_MODEL` | `gemini-3.5-transcribe` | Speaker-aware transcription with timestamps |
 | `LONG_AUDIO_MODEL` | `gemini-3.8-flash` | Full transcription of recordings longer than 30 minutes |
+| `LONG_AUDIO_FALLBACK_MODELS` | `gemini-3.7-flash,gemini-2.5-flash` | Backup models used after automatic retries for temporary Gemini capacity errors |
 | `WHISPER_MODEL` | `whisper-1` | OpenAI Whisper transcription fallback |
 | `DOCUMENT_MODEL` | `gemini-3.8-flash` | Document generation |
 | `PORT` | `3000` | Local server port |
 | `MAX_AUDIO_UPLOAD_MB` | `200` | Maximum audio size accepted by private Blob upload and Gemini processing |
 
-Recordings up to 30 minutes use the dedicated transcription model with precise diarization and word timestamps. Longer recordings automatically use Gemini's long-audio understanding mode with timestamped speaker turns; timestamps and speaker separation are approximate in this mode.
+Recordings up to 30 minutes use the dedicated transcription model with precise diarization and word timestamps. Longer recordings automatically use Gemini's long-audio understanding mode with timestamped speaker turns; timestamps and speaker separation are approximate in this mode. Temporary Gemini 408, 429, and 5xx errors are retried with exponential backoff. If the primary long-audio model remains busy, the configured backup models are tried automatically.
 
 ## Verify
 
