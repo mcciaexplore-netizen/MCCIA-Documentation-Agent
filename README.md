@@ -1,6 +1,6 @@
-# Shruti
+# MCCIA Shruti
 
-Shruti is a local, Google Gemini-powered multilingual documentation agent that turns Hindi, English, Marathi, and code-mixed recordings into grounded professional documents.
+MCCIA Shruti is a Google Gemini-powered multilingual documentation agent for the Mahratta Chamber of Commerce, Industries and Agriculture. It turns Hindi, English, Marathi, and code-mixed recordings into grounded Chamber documents.
 
 ## Current MVP
 
@@ -10,7 +10,7 @@ Shruti is a local, Google Gemini-powered multilingual documentation agent that t
 - Automatic long-audio mode for recordings over 30 minutes
 - Optional OpenAI Whisper transcription fallback for small recordings
 - Editable transcript review gate
-- Meeting minutes, reports, summaries, and template filling
+- MCCIA committee minutes, policy and event reports, leadership briefs, and template filling
 - English, Hindi, or Marathi document output
 - Markdown copy and download
 - Server-side Gemini API key; large audio uploads go directly to private Vercel Blob storage

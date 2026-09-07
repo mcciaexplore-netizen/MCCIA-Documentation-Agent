@@ -3,25 +3,25 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Shruti turns Hindi, English, Marathi, and mixed-language recordings into trustworthy professional documents." />
-    <title>Shruti — Audio to documents</title>
+    <meta name="description" content="MCCIA Shruti turns Hindi, English, Marathi, and mixed-language recordings into trustworthy Chamber documents." />
+    <title>MCCIA Shruti — Meeting documentation</title>
     <link rel="stylesheet" href="/styles.css?v=2" />
   </head>
   <body>
     <div class="grain" aria-hidden="true"></div>
     <header class="topbar">
-      <a class="brand" href="/" aria-label="Shruti home">
-        <span class="brand-mark" aria-hidden="true">श्रु</span>
-        <span>Shruti</span>
+      <a class="brand" href="/" aria-label="MCCIA Shruti home">
+        <span class="brand-mark" aria-hidden="true">M</span>
+        <span>MCCIA <b>श्रुति</b></span>
       </a>
       <div class="status" id="api-status"><span class="status-dot"></span><span>Checking setup…</span></div>
     </header>
 
     <main>
       <section class="hero">
-        <p class="eyebrow">MULTILINGUAL DOCUMENTATION AGENT</p>
-        <h1>From spoken nuance<br />to written clarity.</h1>
-        <p class="hero-copy">Hindi, English, Marathi—or all three in one room. Powered by Google Gemini, Shruti listens carefully and shapes the conversation into a document you can use.</p>
+        <p class="eyebrow">MCCIA MULTILINGUAL DOCUMENTATION AGENT</p>
+        <h1>Every meeting captured.<br />Every action made clear.</h1>
+        <p class="hero-copy">Built for the Mahratta Chamber of Commerce, Industries and Agriculture. Turn committee meetings, member discussions, workshops, policy interactions, and field visits into dependable documents.</p>
         <div class="language-row" aria-label="Supported languages">
           <span>हिंदी</span><i></i><span>English</span><i></i><span>मराठी</span>
         </div>
@@ -37,20 +37,20 @@
         <div class="panel active" id="step-1">
           <div class="panel-heading">
             <div><span class="kicker">STEP 01</span><h2>What should I create?</h2></div>
-            <p>Choose the output, then add your recording. Your API keys stay securely on the server.</p>
+            <p>Choose the MCCIA output, then add your recording. Your API keys stay securely on the server.</p>
           </div>
 
           <div class="document-types" role="radiogroup" aria-label="Document type">
-            <label class="type-card selected"><input type="radio" name="document-type" value="minutes" checked /><span class="type-icon">M</span><strong>Meeting minutes</strong><small>Topics, decisions, owners & deadlines</small></label>
-            <label class="type-card"><input type="radio" name="document-type" value="report" /><span class="type-icon">R</span><strong>Report</strong><small>Executive summary, findings & risks</small></label>
-            <label class="type-card"><input type="radio" name="document-type" value="summary" /><span class="type-icon">S</span><strong>Summary</strong><small>A faithful, shorter account</small></label>
+            <label class="type-card selected"><input type="radio" name="document-type" value="minutes" checked /><span class="type-icon">M</span><strong>MCCIA minutes</strong><small>Committee, decisions, owners & deadlines</small></label>
+            <label class="type-card"><input type="radio" name="document-type" value="report" /><span class="type-icon">R</span><strong>MCCIA report</strong><small>Policy, event, visit & stakeholder reports</small></label>
+            <label class="type-card"><input type="radio" name="document-type" value="summary" /><span class="type-icon">S</span><strong>Leadership brief</strong><small>A faithful brief for members and leadership</small></label>
             <label class="type-card"><input type="radio" name="document-type" value="template" /><span class="type-icon">T</span><strong>Fill a template</strong><small>Keep your structure and formatting</small></label>
           </div>
 
           <div class="form-grid">
             <label class="field"><span>Document language</span><select id="output-language"><option>English</option><option>Hindi</option><option>Marathi</option></select></label>
             <label class="field"><span>Transcription engine</span><select id="transcription-engine"><option value="gemini">Gemini · long recordings</option><option value="whisper">Whisper · up to 4 MB</option></select></label>
-            <label class="field"><span>Extra instructions <em>optional</em></span><input id="custom-instructions" type="text" placeholder="e.g. Focus on field observations" maxlength="4000" /></label>
+            <label class="field"><span>Extra instructions <em>optional</em></span><input id="custom-instructions" type="text" placeholder="e.g. Highlight committee actions and member follow-ups" maxlength="4000" /></label>
           </div>
 
           <div class="template-area hidden" id="template-area">
@@ -61,7 +61,7 @@
           <section class="recorder" aria-label="Record audio">
             <div class="recorder-copy">
               <span class="recorder-icon" aria-hidden="true"></span>
-              <div><strong>Record in this browser</strong><span>Use your microphone for a new meeting or voice note.</span></div>
+              <div><strong>Record in this browser</strong><span>Capture a committee meeting, workshop, interaction, or field note.</span></div>
             </div>
             <div class="recorder-controls">
               <span class="recording-time" id="recording-time" aria-live="polite">00:00</span>
@@ -113,6 +113,6 @@
     </main>
 
     <div class="toast" id="toast" role="alert"></div>
-    <script src="/app.bundle.js?v=11" defer></script>
+    <script src="/app.bundle.js?v=12" defer></script>
   </body>
 </html>

@@ -6877,7 +6877,7 @@ ${newlined}
     const blob = new Blob([state.document], { type: "text/markdown;charset=utf-8" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = `shruti-${type}-${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.md`;
+    link.download = `mccia-${type}-${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.md`;
     link.click();
     URL.revokeObjectURL(link.href);
   });
