@@ -6835,9 +6835,10 @@ ${newlined}
       whisperOption.disabled = !state.whisperConfigured;
       whisperOption.textContent = state.whisperConfigured ? "Whisper \xB7 up to 4 MB" : "Whisper \xB7 add OpenAI key";
       const element = $("#api-status");
-      element.classList.toggle("ready", data.configured);
-      element.classList.toggle("error", !data.configured);
-      element.querySelector("span:last-child").textContent = data.configured ? "Gemini connected" : "Gemini key needed";
+      const fullyConfigured = Boolean(data.configured && data.blobConfigured);
+      element.classList.toggle("ready", fullyConfigured);
+      element.classList.toggle("error", !fullyConfigured);
+      element.querySelector("span:last-child").textContent = !data.configured ? "Gemini key needed" : !data.blobConfigured ? "Storage setup needed" : "Gemini + storage ready";
     } catch {
       $("#api-status").classList.add("error");
       $("#api-status span:last-child").textContent = "Server unavailable";
