@@ -44,12 +44,13 @@ Node.js 20 or newer is required. Production also needs a private Vercel Blob sto
 | `GEMINI_API_KEY` | required | Google Gemini API authentication |
 | `BLOB_READ_WRITE_TOKEN` | optional legacy/local auth | Private client uploads outside Vercel's OIDC environment |
 | `OPENAI_API_KEY` | optional | Enables the Whisper fallback for files up to 4 MB |
-| `TRANSCRIPTION_MODEL` | `gemini-3.5-transcribe` | Speaker-aware transcription with timestamps |
-| `LONG_AUDIO_MODEL` | `gemini-3.8-flash` | Full transcription of recordings longer than 30 minutes |
-| `LONG_AUDIO_FALLBACK_MODELS` | `gemini-3.7-flash,gemini-2.5-flash` | Backup models used after automatic retries for temporary Gemini capacity errors |
+| `GEMINI_MODEL_PROFILE` | `free` | Uses only Google-listed free-tier models; set to `custom` to honor the model overrides below |
+| `TRANSCRIPTION_MODEL` | `gemini-3.5-transcribe` | Custom-profile speaker-aware transcription model |
+| `LONG_AUDIO_MODEL` | `gemini-3.5-flash` | Custom-profile model for recordings longer than 30 minutes |
+| `LONG_AUDIO_FALLBACK_MODELS` | `gemini-3.5-flash-lite,gemini-3.1-flash-lite` | Custom-profile backup models for long recordings |
 | `WHISPER_MODEL` | `whisper-1` | OpenAI Whisper transcription fallback |
-| `DOCUMENT_MODEL` | `gemini-3.8-flash` | Document generation |
-| `DOCUMENT_FALLBACK_MODELS` | `gemini-3.7-flash,gemini-2.5-flash` | Backup document models used when the primary model is busy or its quota is exhausted |
+| `DOCUMENT_MODEL` | `gemini-3.5-flash-lite` | Custom-profile document generation model |
+| `DOCUMENT_FALLBACK_MODELS` | `gemini-3.1-flash-lite,gemini-3.5-flash` | Custom-profile backup document models |
 | `PORT` | `3000` | Local server port |
 | `MAX_AUDIO_UPLOAD_MB` | `200` | Maximum audio size accepted by private Blob upload and Gemini processing |
 

@@ -14,14 +14,19 @@ await loadLocalEnv(path.join(ROOT, ".env"));
 
 const PORT = Number(process.env.PORT) || 3000;
 const MAX_UPLOAD_BYTES = (Number(process.env.MAX_AUDIO_UPLOAD_MB) || 200) * 1024 * 1024;
-const TRANSCRIPTION_MODEL = process.env.TRANSCRIPTION_MODEL || "gemini-3.5-transcribe";
-const LONG_AUDIO_MODEL = process.env.LONG_AUDIO_MODEL || "gemini-3.8-flash";
-const LONG_AUDIO_FALLBACK_MODELS = String(process.env.LONG_AUDIO_FALLBACK_MODELS || "gemini-3.7-flash,gemini-2.5-flash")
+const GEMINI_MODEL_PROFILE = process.env.GEMINI_MODEL_PROFILE === "custom" ? "custom" : "free";
+const TRANSCRIPTION_MODEL = GEMINI_MODEL_PROFILE === "free" ? "gemini-3.5-transcribe" : (process.env.TRANSCRIPTION_MODEL || "gemini-3.5-transcribe");
+const LONG_AUDIO_MODEL = GEMINI_MODEL_PROFILE === "free" ? "gemini-3.5-flash" : (process.env.LONG_AUDIO_MODEL || "gemini-3.5-flash");
+const LONG_AUDIO_FALLBACK_MODELS = String(GEMINI_MODEL_PROFILE === "free"
+  ? "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.6-flash"
+  : (process.env.LONG_AUDIO_FALLBACK_MODELS || "gemini-3.5-flash-lite,gemini-3.1-flash-lite"))
   .split(",")
   .map((model) => model.trim())
   .filter(Boolean);
-const DOCUMENT_MODEL = process.env.DOCUMENT_MODEL || "gemini-3.8-flash";
-const DOCUMENT_FALLBACK_MODELS = String(process.env.DOCUMENT_FALLBACK_MODELS || "gemini-3.7-flash,gemini-2.5-flash")
+const DOCUMENT_MODEL = GEMINI_MODEL_PROFILE === "free" ? "gemini-3.5-flash-lite" : (process.env.DOCUMENT_MODEL || "gemini-3.5-flash-lite");
+const DOCUMENT_FALLBACK_MODELS = String(GEMINI_MODEL_PROFILE === "free"
+  ? "gemini-3.1-flash-lite,gemini-3.5-flash,gemini-3.6-flash"
+  : (process.env.DOCUMENT_FALLBACK_MODELS || "gemini-3.1-flash-lite,gemini-3.5-flash"))
   .split(",")
   .map((model) => model.trim())
   .filter(Boolean);
@@ -38,6 +43,7 @@ const mimeTypes = {
   ".ico": "image/x-icon",
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".png": "image/png",
   ".svg": "image/svg+xml",
 };
 
@@ -330,10 +336,21 @@ function validatePrivateBlobUrl(value) {
 async function uploadBlobToGemini(blobUrl, filename, mimeType) {
   requireBlobStorage();
   const safeUrl = validatePrivateBlobUrl(blobUrl);
-  const result = await get(safeUrl, { access: "private", useCache: false });
+  let result = null;
+  let blobReadError = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      result = await get(safeUrl, { access: "private", useCache: false });
+      if (result?.statusCode === 200 && result.stream) break;
+    } catch (error) {
+      blobReadError = error;
+    }
+    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 500 * (2 ** attempt)));
+  }
   if (!result || result.statusCode !== 200 || !result.stream) {
-    const error = new Error("The uploaded recording could not be read from private storage.");
-    error.status = 404;
+    if (blobReadError) console.warn(`Private recording read failed after retries: ${blobReadError.message}`);
+    const error = new Error("The recording uploaded, but private storage was not ready to read it. Please try once more.");
+    error.status = 502;
     throw error;
   }
 
@@ -621,6 +638,7 @@ const server = http.createServer(async (request, response) => {
         whisperConfigured: Boolean(process.env.OPENAI_API_KEY),
         agent: AGENT_NAME,
         provider: "Google Gemini",
+        modelProfile: GEMINI_MODEL_PROFILE,
         maxUploadMb: Math.round(MAX_UPLOAD_BYTES / 1024 / 1024),
         models: { transcription: TRANSCRIPTION_MODEL, longAudio: LONG_AUDIO_MODEL, longAudioFallbacks: LONG_AUDIO_FALLBACK_MODELS, whisper: WHISPER_MODEL, document: DOCUMENT_MODEL, documentFallbacks: DOCUMENT_FALLBACK_MODELS },
         release: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || "local",
