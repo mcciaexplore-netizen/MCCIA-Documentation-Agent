@@ -13,17 +13,21 @@ Shruti is a local, Google Gemini-powered multilingual documentation agent that t
 - Meeting minutes, reports, summaries, and template filling
 - English, Hindi, or Marathi document output
 - Markdown copy and download
-- Server-side Gemini API key; audio is relayed in small resumable chunks to Gemini and is not saved locally
+- Server-side Gemini API key; large audio uploads go directly to private Vercel Blob storage
+- Private recordings are streamed to Gemini in supported 8 MiB resumable chunks
 - Temporary Gemini Files API uploads are deleted immediately after transcription
+- Temporary private Blob uploads are deleted immediately after transcription
 - Large recordings bypass Vercel's function request-body limit
 
 ## Run locally
 
 1. Copy `.env.example` to `.env`.
 2. Add your Google Gemini API key to `.env`.
-3. Start the server:
+3. Run the build, then start the server:
 
    ```powershell
+   npm install
+   npm run build
    npm start
    ```
 
@@ -31,20 +35,21 @@ Shruti is a local, Google Gemini-powered multilingual documentation agent that t
 
 To record directly, choose **Start recording** and allow microphone access for `localhost`. Stop and preview the recording before sending it for transcription. The recording stays in browser memory until **Transcribe recording** is selected; the server does not save it to disk.
 
-No package installation is required. Node.js 20 or newer provides the server, `fetch`, `FormData`, and test runner used by the app.
+Node.js 20 or newer is required. Production also needs a private Vercel Blob store connected to the project so Vercel supplies `BLOB_READ_WRITE_TOKEN`.
 
 ## Configuration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `GEMINI_API_KEY` | required | Google Gemini API authentication |
+| `BLOB_READ_WRITE_TOKEN` | required in production | Private client uploads for recordings larger than Vercel's function limit |
 | `OPENAI_API_KEY` | optional | Enables the Whisper fallback for files up to 4 MB |
 | `TRANSCRIPTION_MODEL` | `gemini-3.5-transcribe` | Speaker-aware transcription with timestamps |
 | `LONG_AUDIO_MODEL` | `gemini-3.8-flash` | Full transcription of recordings longer than 30 minutes |
 | `WHISPER_MODEL` | `whisper-1` | OpenAI Whisper transcription fallback |
 | `DOCUMENT_MODEL` | `gemini-3.8-flash` | Document generation |
 | `PORT` | `3000` | Local server port |
-| `MAX_AUDIO_UPLOAD_MB` | `200` | Maximum audio size accepted when creating a direct Gemini upload session |
+| `MAX_AUDIO_UPLOAD_MB` | `200` | Maximum audio size accepted by private Blob upload and Gemini processing |
 
 Recordings up to 30 minutes use the dedicated transcription model with precise diarization and word timestamps. Longer recordings automatically use Gemini's long-audio understanding mode with timestamped speaker turns; timestamps and speaker separation are approximate in this mode.
 

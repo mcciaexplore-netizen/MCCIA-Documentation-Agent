@@ -1,3 +1,5 @@
+import { upload } from "@vercel/blob/client";
+
 const state = {
   file: null,
   transcription: null,
@@ -10,6 +12,7 @@ const state = {
   recordingUrl: "",
   durationPromise: null,
   whisperConfigured: false,
+  blobConfigured: false,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -214,38 +217,20 @@ async function request(url, options) {
 }
 
 async function uploadRecording(file) {
-  const session = await request("/api/uploads/start", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      filename: file.name,
-      mimeType: file.type || "application/octet-stream",
-      size: file.size,
-    }),
-  });
-
-  const chunkSize = 3 * 1024 * 1024;
-  let completedFile = null;
-  for (let offset = 0; offset < file.size; offset += chunkSize) {
-    const end = Math.min(offset + chunkSize, file.size);
-    const final = end === file.size;
-    const percent = Math.round((end / file.size) * 100);
-    setBusy(true, "Uploading securely…", `Relaying the recording in safe chunks · ${percent}%`);
-    const result = await request("/api/uploads/chunk", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/octet-stream",
-        "X-Upload-Url": session.uploadUrl,
-        "X-Upload-Offset": String(offset),
-        "X-Upload-Final": final ? "1" : "0",
-      },
-      body: file.slice(offset, end),
-    });
-    if (result.file) completedFile = result.file;
+  if (!state.blobConfigured) {
+    throw new Error("Large-file storage is not configured. Connect a private Vercel Blob store to this project, then redeploy.");
   }
-
-  if (!completedFile?.name) throw new Error("Gemini did not return an audio file reference.");
-  return completedFile.name;
+  const safeName = file.name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+/, "") || "recording.webm";
+  const blob = await upload(`recordings/${safeName}`, file, {
+    access: "private",
+    handleUploadUrl: "/api/uploads/blob-token",
+    multipart: file.size > 5 * 1024 * 1024,
+    contentType: file.type || "application/octet-stream",
+    onUploadProgress: ({ percentage }) => {
+      setBusy(true, "Uploading securely…", `Sending directly to private storage · ${Math.round(percentage)}%`);
+    },
+  });
+  return blob.url;
 }
 
 function renderMetadata(data) {
@@ -286,7 +271,7 @@ async function transcribe() {
         body: state.file,
       });
     } else {
-      const fileName = await uploadRecording(state.file);
+      const blobUrl = await uploadRecording(state.file);
       const longRecording = durationSeconds > 30 * 60;
       setBusy(
         true,
@@ -296,7 +281,7 @@ async function transcribe() {
       data = await request("/api/transcribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileName, filename: state.file.name, durationSeconds }),
+        body: JSON.stringify({ blobUrl, filename: state.file.name, mimeType: state.file.type, durationSeconds }),
       });
     }
     state.transcription = data;
@@ -376,6 +361,7 @@ async function checkHealth() {
   try {
     const data = await request("/api/health");
     state.whisperConfigured = Boolean(data.whisperConfigured);
+    state.blobConfigured = Boolean(data.blobConfigured);
     const whisperOption = $("#transcription-engine option[value='whisper']");
     whisperOption.disabled = !state.whisperConfigured;
     whisperOption.textContent = state.whisperConfigured ? "Whisper · up to 4 MB" : "Whisper · add OpenAI key";

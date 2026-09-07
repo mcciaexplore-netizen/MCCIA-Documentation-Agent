@@ -5,11 +5,18 @@
   "type": "module",
   "description": "Multilingual audio-to-document agent for Hindi, English, Marathi, and mixed speech.",
   "scripts": {
+    "build": "node scripts/build-client.js",
     "start": "node server.js",
     "dev": "node --watch server.js",
     "test": "node --test"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "@vercel/blob": "^2.8.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }

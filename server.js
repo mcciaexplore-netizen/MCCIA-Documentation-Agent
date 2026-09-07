@@ -2,6 +2,8 @@ import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { del, get } from "@vercel/blob";
+import { handleUpload } from "@vercel/blob/client";
 import { extractGeminiText, normalizeGeminiTranscription, normalizeLongAudioTranscript, normalizeTranscription } from "./lib/core.js";
 import { AGENT_NAME, buildDocumentRequest, SYSTEM_PROMPT } from "./lib/prompts.js";
 
@@ -16,7 +18,7 @@ const TRANSCRIPTION_MODEL = process.env.TRANSCRIPTION_MODEL || "gemini-3.5-trans
 const LONG_AUDIO_MODEL = process.env.LONG_AUDIO_MODEL || "gemini-3.8-flash";
 const DOCUMENT_MODEL = process.env.DOCUMENT_MODEL || "gemini-3.8-flash";
 const PRECISE_TRANSCRIPTION_LIMIT_SECONDS = 30 * 60;
-const MAX_RELAY_CHUNK_BYTES = 3.5 * 1024 * 1024;
+const GEMINI_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
 const MAX_WHISPER_BYTES = 4 * 1024 * 1024;
 const WHISPER_MODEL = process.env.WHISPER_MODEL || "whisper-1";
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
@@ -153,47 +155,40 @@ function normalizeUploadInput(input) {
   return { filename, mimeType, size };
 }
 
-async function createUploadSession(request, response) {
-  const input = parseJsonBody(await readBody(request, 32 * 1024));
-  const upload = normalizeUploadInput(input);
-  const uploadUrl = await startGeminiUploadSession(upload);
-  sendJson(response, 200, { uploadUrl });
+function requireBlobStorage() {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    const error = new Error("Large-file storage is not configured. Connect a private Vercel Blob store to this project.");
+    error.status = 503;
+    throw error;
+  }
 }
 
-function validateGeminiUploadUrl(value) {
-  let url;
-  try {
-    url = new URL(String(value || ""));
-  } catch {
-    const error = new Error("Invalid upload session.");
-    error.status = 400;
-    throw error;
-  }
-  if (url.protocol !== "https:" || url.hostname !== "generativelanguage.googleapis.com" || url.pathname !== "/upload/v1beta/files") {
-    const error = new Error("Upload session destination is not allowed.");
-    error.status = 400;
-    throw error;
-  }
-  return url.toString();
+async function createBlobUploadToken(request, response) {
+  requireBlobStorage();
+  const body = parseJsonBody(await readBody(request, 64 * 1024));
+  const result = await handleUpload({
+    request,
+    body,
+    onBeforeGenerateToken: async (pathname) => {
+      const normalizedPath = String(pathname || "").replace(/\\/g, "/");
+      if (!/^recordings\/[^/]+\.(mp3|mpeg|mpga|m4a|wav|webm|ogg|flac|aac|aiff|opus)$/i.test(normalizedPath)) {
+        const error = new Error("Unsupported recording filename.");
+        error.status = 415;
+        throw error;
+      }
+      return {
+        allowedContentTypes: ["audio/*", "video/webm", "application/ogg", "application/octet-stream"],
+        maximumSizeInBytes: MAX_UPLOAD_BYTES,
+        addRandomSuffix: true,
+        cacheControlMaxAge: 60,
+      };
+    },
+    onUploadCompleted: async () => {},
+  });
+  sendJson(response, 200, result);
 }
 
-async function relayUploadChunk(request, response) {
-  const uploadUrl = validateGeminiUploadUrl(request.headers["x-upload-url"]);
-  const offset = Number(request.headers["x-upload-offset"]);
-  const final = request.headers["x-upload-final"] === "1";
-  if (!Number.isSafeInteger(offset) || offset < 0) {
-    const error = new Error("Invalid upload offset.");
-    error.status = 400;
-    throw error;
-  }
-
-  const chunk = await readBody(request, MAX_RELAY_CHUNK_BYTES);
-  if (!chunk.length) {
-    const error = new Error("Upload chunk is empty.");
-    error.status = 400;
-    throw error;
-  }
-
+async function sendGeminiUploadChunk(uploadUrl, offset, chunk, final) {
   const uploadResponse = await fetch(uploadUrl, {
     method: "POST",
     headers: {
@@ -209,7 +204,93 @@ async function relayUploadChunk(request, response) {
     error.status = uploadResponse.status;
     throw error;
   }
-  sendJson(response, 200, { uploadedBytes: chunk.length, file: payload.file || null });
+  return payload.file || null;
+}
+
+function consumeBuffers(buffers, byteCount) {
+  const output = Buffer.allocUnsafe(byteCount);
+  let written = 0;
+  while (written < byteCount) {
+    const current = buffers[0];
+    const needed = byteCount - written;
+    if (current.length <= needed) {
+      current.copy(output, written);
+      written += current.length;
+      buffers.shift();
+    } else {
+      current.copy(output, written, 0, needed);
+      buffers[0] = current.subarray(needed);
+      written += needed;
+    }
+  }
+  return output;
+}
+
+function validatePrivateBlobUrl(value) {
+  let url;
+  try {
+    url = new URL(String(value || ""));
+  } catch {
+    const error = new Error("Invalid recording upload reference.");
+    error.status = 400;
+    throw error;
+  }
+  if (url.protocol !== "https:" || !url.hostname.endsWith(".private.blob.vercel-storage.com")) {
+    const error = new Error("Recording must come from this project's private upload storage.");
+    error.status = 400;
+    throw error;
+  }
+  return url.toString();
+}
+
+async function uploadBlobToGemini(blobUrl, filename, mimeType) {
+  requireBlobStorage();
+  const safeUrl = validatePrivateBlobUrl(blobUrl);
+  const result = await get(safeUrl, { access: "private", useCache: false });
+  if (!result || result.statusCode !== 200 || !result.stream) {
+    const error = new Error("The uploaded recording could not be read from private storage.");
+    error.status = 404;
+    throw error;
+  }
+
+  const upload = normalizeUploadInput({
+    filename,
+    mimeType: result.blob.contentType || mimeType,
+    size: result.blob.size,
+  });
+  const uploadUrl = await startGeminiUploadSession(upload);
+  const buffers = [];
+  let bufferedBytes = 0;
+  let uploadedBytes = 0;
+
+  for await (const value of result.stream) {
+    const chunk = Buffer.from(value);
+    buffers.push(chunk);
+    bufferedBytes += chunk.length;
+    while (bufferedBytes >= GEMINI_UPLOAD_CHUNK_BYTES && uploadedBytes + GEMINI_UPLOAD_CHUNK_BYTES < upload.size) {
+      const part = consumeBuffers(buffers, GEMINI_UPLOAD_CHUNK_BYTES);
+      bufferedBytes -= part.length;
+      await sendGeminiUploadChunk(uploadUrl, uploadedBytes, part, false);
+      uploadedBytes += part.length;
+    }
+  }
+
+  if (uploadedBytes + bufferedBytes !== upload.size || bufferedBytes <= 0) {
+    throw new Error("The stored recording ended before all bytes were received.");
+  }
+  const finalPart = consumeBuffers(buffers, bufferedBytes);
+  const file = await sendGeminiUploadChunk(uploadUrl, uploadedBytes, finalPart, true);
+  if (!file?.name) throw new Error("Gemini did not return an audio file reference.");
+  return file;
+}
+
+async function deletePrivateBlob(blobUrl) {
+  if (!blobUrl) return;
+  try {
+    await del(blobUrl);
+  } catch (error) {
+    console.warn(`Could not delete temporary private recording: ${error.message}`);
+  }
 }
 
 async function waitForGeminiFile(file) {
@@ -246,19 +327,25 @@ async function generateWithGemini(model, body) {
 
 async function transcribe(request, response) {
   const input = parseJsonBody(await readBody(request, 32 * 1024));
-  const fileName = String(input?.fileName || "");
+  const blobUrl = input?.blobUrl ? validatePrivateBlobUrl(input.blobUrl) : "";
+  let fileName = String(input?.fileName || "");
   const filename = path.basename(String(input?.filename || "recording.webm")).slice(0, 200);
+  const mimeType = String(input?.mimeType || "application/octet-stream");
   const durationSeconds = Math.max(0, Number(input?.durationSeconds) || 0);
   let isLongRecording = durationSeconds > PRECISE_TRANSCRIPTION_LIMIT_SECONDS;
-  if (!/^files\/[A-Za-z0-9_-]+$/.test(fileName)) {
+  if (!blobUrl && !/^files\/[A-Za-z0-9_-]+$/.test(fileName)) {
     const error = new Error("Gemini returned an invalid audio file reference.");
     error.status = 400;
     throw error;
   }
 
-  let uploadedFile = { name: fileName };
+  let uploadedFile = null;
   let raw;
   try {
+    uploadedFile = blobUrl
+      ? await uploadBlobToGemini(blobUrl, filename, mimeType)
+      : { name: fileName };
+    fileName = uploadedFile.name;
     uploadedFile = await geminiRequest(`${GEMINI_API_BASE}/${fileName}`);
     uploadedFile = await waitForGeminiFile(uploadedFile);
     if (!durationSeconds && Number(uploadedFile.sizeBytes) > 12 * 1024 * 1024) isLongRecording = true;
@@ -292,6 +379,7 @@ async function transcribe(request, response) {
         });
   } finally {
     if (uploadedFile) await deleteGeminiFile(uploadedFile);
+    if (blobUrl) await deletePrivateBlob(blobUrl);
   }
 
   const normalized = isLongRecording
@@ -412,6 +500,7 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 200, {
         ok: true,
         configured: Boolean(process.env.GEMINI_API_KEY),
+        blobConfigured: Boolean(process.env.BLOB_READ_WRITE_TOKEN),
         whisperConfigured: Boolean(process.env.OPENAI_API_KEY),
         agent: AGENT_NAME,
         provider: "Google Gemini",
@@ -420,12 +509,8 @@ const server = http.createServer(async (request, response) => {
       });
       return;
     }
-    if (request.method === "POST" && url.pathname === "/api/uploads/start") {
-      await createUploadSession(request, response);
-      return;
-    }
-    if (request.method === "POST" && url.pathname === "/api/uploads/chunk") {
-      await relayUploadChunk(request, response);
+    if (request.method === "POST" && url.pathname === "/api/uploads/blob-token") {
+      await createBlobUploadToken(request, response);
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/transcribe") {
