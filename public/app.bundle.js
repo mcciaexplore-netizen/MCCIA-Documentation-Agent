@@ -6574,7 +6574,7 @@ ${newlined}
     $(".recorder").classList.remove("is-recording");
     $("#record-button").classList.remove("hidden");
     $("#stop-button").classList.add("hidden");
-    if (!preserveFile && state.file?.name.startsWith("shruti-recording-")) {
+    if (!preserveFile && state.file?.name.startsWith("mccia-recording-")) {
       state.file = null;
       transcribeButton.disabled = true;
       uploadZone.classList.remove("has-file");
@@ -6636,7 +6636,7 @@ ${newlined}
     const type = recorder?.mimeType || "audio/webm";
     const blob = new Blob(state.recordingChunks, { type });
     const timestamp = (/* @__PURE__ */ new Date()).toISOString().replaceAll(":", "-").replace(/\.\d{3}Z$/, "Z");
-    const file = new File([blob], `shruti-recording-${timestamp}.${recordingExtension(type)}`, { type });
+    const file = new File([blob], `mccia-recording-${timestamp}.${recordingExtension(type)}`, { type });
     chooseFile(file, elapsed / 1e3);
     state.recordingUrl = URL.createObjectURL(blob);
     $("#recording-preview").src = state.recordingUrl;
