@@ -1,28 +1,28 @@
 # MCCIA Documentation Agent
 
-The MCCIA Documentation Agent is a Google Gemini-powered multilingual documentation tool for the Mahratta Chamber of Commerce, Industries and Agriculture. It turns Hindi, English, Marathi, and code-mixed recordings into grounded Chamber documents.
+The MCCIA Documentation Agent is a Groq-powered multilingual documentation tool for the Mahratta Chamber of Commerce, Industries and Agriculture. It turns Hindi, English, Marathi, and code-mixed recordings into grounded Chamber documents.
 
 ## Current MVP
 
-- Audio upload for Gemini-supported formats including MP3, M4A, WAV, WebM, OGG, FLAC, AAC, AIFF, and Opus
+- Audio upload for MP3, M4A, WAV, WebM, OGG, FLAC, AAC, AIFF, and Opus
 - In-browser microphone recording with a live timer and playback preview
-- Timestamped speaker diarization
-- Automatic long-audio mode for recordings over 30 minutes
-- Optional OpenAI Whisper transcription fallback for small recordings
+- Groq Whisper Large V3 Turbo transcription with segment timestamps
+- Automatic conversion into compact 15-minute MP3 chunks below Groq's 25 MB free-plan limit
+- Support for 30–90 minute recordings within the configured 200 MB upload limit
 - Editable transcript review gate
 - MCCIA committee minutes, policy and event reports, leadership briefs, and template filling
 - English, Hindi, or Marathi document output
 - Markdown copy and download
-- Server-side Gemini API key; large audio uploads go directly to private Vercel Blob storage
-- Private recordings are streamed to Gemini in supported 8 MiB resumable chunks
-- Temporary Gemini Files API uploads are deleted immediately after transcription
+- Groq Compound Mini generation for minutes, reports, summaries, and templates
+- Server-side Groq API key; large audio uploads go directly to private Vercel Blob storage
+- Private recordings are converted and sent to Groq as valid audio chunks
 - Temporary private Blob uploads are deleted immediately after transcription
 - Large recordings bypass Vercel's function request-body limit
 
 ## Run locally
 
 1. Copy `.env.example` to `.env`.
-2. Add your Google Gemini API key to `.env`.
+2. Add your Groq API key to `.env`.
 3. Run the build, then start the server:
 
    ```powershell
@@ -41,20 +41,18 @@ Node.js 20 or newer is required. Production also needs a private Vercel Blob sto
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `GEMINI_API_KEY` | required | Google Gemini API authentication |
+| `GROQ_API_KEY` | required | Groq API authentication |
 | `BLOB_READ_WRITE_TOKEN` | optional legacy/local auth | Private client uploads outside Vercel's OIDC environment |
-| `OPENAI_API_KEY` | optional | Enables the Whisper fallback for files up to 4 MB |
-| `GEMINI_MODEL_PROFILE` | `free` | Uses only Google-listed free-tier models; set to `custom` to honor the model overrides below |
-| `TRANSCRIPTION_MODEL` | `gemini-3.5-transcribe` | Custom-profile speaker-aware transcription model |
-| `LONG_AUDIO_MODEL` | `gemini-3.5-flash` | Custom-profile model for recordings longer than 30 minutes |
-| `LONG_AUDIO_FALLBACK_MODELS` | `gemini-3.5-flash-lite,gemini-3.1-flash-lite` | Custom-profile backup models for long recordings |
-| `WHISPER_MODEL` | `whisper-1` | OpenAI Whisper transcription fallback |
-| `DOCUMENT_MODEL` | `gemini-3.5-flash-lite` | Custom-profile document generation model |
-| `DOCUMENT_FALLBACK_MODELS` | `gemini-3.1-flash-lite,gemini-3.5-flash` | Custom-profile backup document models |
+| `GROQ_TRANSCRIPTION_MODEL` | `whisper-large-v3-turbo` | Multilingual transcription model |
+| `GROQ_DOCUMENT_MODEL` | `groq/compound-mini` | Minutes and report generation model |
+| `GROQ_CHUNK_MINUTES` | `15` | Length of each compressed transcription chunk (5–20 minutes) |
+| `GROQ_CHUNK_CONCURRENCY` | `2` | Parallel Groq transcription requests (1–4) |
 | `PORT` | `3000` | Local server port |
-| `MAX_AUDIO_UPLOAD_MB` | `200` | Maximum audio size accepted by private Blob upload and Gemini processing |
+| `MAX_AUDIO_UPLOAD_MB` | `200` | Maximum audio size accepted by private Blob upload and Groq processing |
 
-Recordings up to 30 minutes use the dedicated transcription model with precise diarization and word timestamps. Longer recordings automatically use Gemini's long-audio understanding mode with timestamped speaker turns; timestamps and speaker separation are approximate in this mode. Temporary Gemini 408, 429, and 5xx errors are retried with exponential backoff. If a model's quota is exhausted, the app switches immediately to configured backup models for both transcription and document generation.
+Every recording is converted server-side to 16 kHz mono MP3 and divided into 15-minute chunks. At 32 kbps these chunks are normally about 3.6 MB each, comfortably below Groq's 25 MB free-plan limit. Temporary Groq 408, 429, and 5xx errors are retried with exponential backoff. Source recordings and converted chunks are deleted immediately after processing.
+
+Groq Whisper provides timestamps but not speaker diarization. Until WhisperX is connected, the transcript uses `Speaker 1` and users can correct speaker names during the review step. A future `WhisperX + pyannote` service can be added without changing the document-generation workflow.
 
 ## Verify
 

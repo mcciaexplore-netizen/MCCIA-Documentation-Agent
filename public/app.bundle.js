@@ -6516,7 +6516,6 @@ ${newlined}
     recordingTimer: null,
     recordingUrl: "",
     durationPromise: null,
-    whisperConfigured: false,
     blobConfigured: false,
     blobUploadMode: ""
   };
@@ -6728,7 +6727,7 @@ ${newlined}
       ["Audio quality", data.audioQuality || "Not assessed"]
     ];
     $("#metadata").innerHTML = items.map(([label, value]) => `<div class="meta-item"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
-    $("#speaker-map").textContent = data.speakers?.length ? `Detected labels: ${data.speakers.join(", ")}. Edit them directly in the transcript if you know the names.` : "Speaker labels were not available for this recording.";
+    $("#speaker-map").textContent = data.diarizationAvailable === false ? "Groq Whisper does not separate speakers yet. All speech is temporarily labelled Speaker 1; edit names where known. WhisperX diarization is planned for a later update." : data.speakers?.length ? `Detected labels: ${data.speakers.join(", ")}. Edit them directly in the transcript if you know the names.` : "Speaker labels were not available for this recording.";
   }
   async function transcribe() {
     if (!state.file) return;
@@ -6741,34 +6740,18 @@ ${newlined}
     setBusy(true, "Preparing recording\u2026", "Checking the file securely before transcription.");
     try {
       const durationSeconds = Number(await state.durationPromise) || 0;
-      const engine = $("#transcription-engine").value;
-      let data;
-      if (engine === "whisper") {
-        if (!state.whisperConfigured) throw new Error("Whisper needs an OPENAI_API_KEY in the Vercel environment.");
-        if (state.file.size > 4 * 1024 * 1024) throw new Error("Whisper fallback accepts files up to 4 MB on Vercel. Use Gemini for this longer recording.");
-        setBusy(true, "Transcribing with Whisper\u2026", "Creating segment timestamps while preserving the spoken language.");
-        data = await request("/api/transcribe/whisper", {
-          method: "POST",
-          headers: {
-            "Content-Type": state.file.type || "application/octet-stream",
-            "X-File-Name": encodeURIComponent(state.file.name)
-          },
-          body: state.file
-        });
-      } else {
-        const blobUrl = await uploadRecording(state.file);
-        const longRecording = durationSeconds > 30 * 60;
-        setBusy(
-          true,
-          longRecording ? "Transcribing long recording\u2026" : "Listening carefully\u2026",
-          longRecording ? "Processing the full recording with timestamped speaker turns. If Gemini is busy, MCCIA will retry automatically and use backup capacity." : "Separating speakers and preserving mixed-language speech."
-        );
-        data = await request("/api/transcribe", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ blobUrl, filename: state.file.name, mimeType: state.file.type, durationSeconds })
-        });
-      }
+      const blobUrl = await uploadRecording(state.file);
+      const longRecording = durationSeconds > 30 * 60;
+      setBusy(
+        true,
+        longRecording ? "Transcribing long recording\u2026" : "Listening carefully\u2026",
+        longRecording ? "Preparing secure 15-minute chunks, then transcribing them with Groq Whisper." : "Preserving Hindi, Marathi, English, and mixed-language speech with Groq Whisper."
+      );
+      const data = await request("/api/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ blobUrl, filename: state.file.name, mimeType: state.file.type, durationSeconds })
+      });
       state.transcription = data;
       $("#transcript").value = data.text;
       renderMetadata(data);
@@ -6807,7 +6790,7 @@ ${newlined}
       });
       state.document = data.document;
       $("#document-output").textContent = data.document;
-      $("#document-model").textContent = `Generated with ${data.provider || "Google Gemini"} \xB7 ${data.model}`;
+      $("#document-model").textContent = `Generated with ${data.provider || "Groq"} \xB7 ${data.model}`;
       goToStep(3);
       return true;
     } catch (error) {
@@ -6838,17 +6821,13 @@ ${newlined}
   async function checkHealth() {
     try {
       const data = await request("/api/health");
-      state.whisperConfigured = Boolean(data.whisperConfigured);
       state.blobConfigured = Boolean(data.blobConfigured);
       state.blobUploadMode = data.blobUploadMode || "";
-      const whisperOption = $("#transcription-engine option[value='whisper']");
-      whisperOption.disabled = !state.whisperConfigured;
-      whisperOption.textContent = state.whisperConfigured ? "Whisper \xB7 up to 4 MB" : "Whisper \xB7 add OpenAI key";
       const element = $("#api-status");
       const fullyConfigured = Boolean(data.configured && data.blobConfigured);
       element.classList.toggle("ready", fullyConfigured);
       element.classList.toggle("error", !fullyConfigured);
-      element.querySelector("span:last-child").textContent = !data.configured ? "Gemini key needed" : !data.blobConfigured ? "Storage setup needed" : "Gemini + storage ready";
+      element.querySelector("span:last-child").textContent = !data.configured ? "Groq key needed" : !data.blobConfigured ? "Storage setup needed" : "Groq + storage ready";
     } catch {
       $("#api-status").classList.add("error");
       $("#api-status span:last-child").textContent = "Server unavailable";

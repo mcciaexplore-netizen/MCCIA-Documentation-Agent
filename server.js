@@ -1,10 +1,15 @@
 import http from "node:http";
+import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { del, get, issueSignedToken } from "@vercel/blob";
 import { handleUpload, handleUploadPresigned } from "@vercel/blob/client";
-import { extractGeminiText, normalizeGeminiTranscription, normalizeLongAudioTranscript, normalizeTranscription } from "./lib/core.js";
+import ffmpegPath from "ffmpeg-static";
+import { combineGroqTranscriptions, extractGeminiText, normalizeGeminiTranscription, normalizeLongAudioTranscript, normalizeTranscription } from "./lib/core.js";
 import { AGENT_NAME, buildDocumentRequest, SYSTEM_PROMPT } from "./lib/prompts.js";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -14,6 +19,12 @@ await loadLocalEnv(path.join(ROOT, ".env"));
 
 const PORT = Number(process.env.PORT) || 3000;
 const MAX_UPLOAD_BYTES = (Number(process.env.MAX_AUDIO_UPLOAD_MB) || 200) * 1024 * 1024;
+const GROQ_TRANSCRIPTION_MODEL = process.env.GROQ_TRANSCRIPTION_MODEL || "whisper-large-v3-turbo";
+const GROQ_DOCUMENT_MODEL = process.env.GROQ_DOCUMENT_MODEL || "groq/compound-mini";
+const GROQ_API_BASE = "https://api.groq.com/openai/v1";
+const GROQ_MAX_CHUNK_BYTES = 24 * 1024 * 1024;
+const GROQ_CHUNK_SECONDS = Math.max(5 * 60, Math.min(20 * 60, Number(process.env.GROQ_CHUNK_MINUTES || 15) * 60));
+const GROQ_CHUNK_CONCURRENCY = Math.max(1, Math.min(4, Number(process.env.GROQ_CHUNK_CONCURRENCY) || 2));
 const GEMINI_MODEL_PROFILE = process.env.GEMINI_MODEL_PROFILE === "custom" ? "custom" : "free";
 const TRANSCRIPTION_MODEL = GEMINI_MODEL_PROFILE === "free" ? "gemini-3.5-transcribe" : (process.env.TRANSCRIPTION_MODEL || "gemini-3.5-transcribe");
 const LONG_AUDIO_MODEL = GEMINI_MODEL_PROFILE === "free" ? "gemini-3.5-flash" : (process.env.LONG_AUDIO_MODEL || "gemini-3.5-flash");
@@ -86,6 +97,60 @@ function requireOpenAIKey() {
     throw error;
   }
   return process.env.OPENAI_API_KEY;
+}
+
+function requireGroqKey() {
+  if (!process.env.GROQ_API_KEY) {
+    const error = new Error("Groq is not configured yet. Add GROQ_API_KEY to the Vercel environment, then redeploy.");
+    error.status = 503;
+    throw error;
+  }
+  return process.env.GROQ_API_KEY;
+}
+
+function retryAfterMs(response) {
+  const header = response.headers.get("retry-after");
+  if (!header) return 0;
+  const seconds = Number(header);
+  return Number.isFinite(seconds) ? seconds * 1000 : Math.max(0, Date.parse(header) - Date.now());
+}
+
+async function groqRequest(url, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${requireGroqKey()}`,
+      ...options.headers,
+    },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(payload?.error?.message || `Groq request failed (${response.status}).`);
+    error.status = response.status;
+    error.retryAfterMs = retryAfterMs(response);
+    throw error;
+  }
+  return payload;
+}
+
+function isRetryableGroqError(error) {
+  return [408, 429, 500, 502, 503, 504].includes(Number(error?.status));
+}
+
+async function withGroqRetry(operation, attempts = 4) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableGroqError(error) || attempt === attempts - 1) throw error;
+      const delay = retryDelayMs(attempt, error.retryAfterMs);
+      console.warn(`Groq is temporarily unavailable (${error.status}); retrying in ${delay} ms.`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw lastError;
 }
 
 async function geminiRequest(url, options = {}) {
@@ -394,6 +459,122 @@ async function deletePrivateBlob(blobUrl) {
   }
 }
 
+async function getPrivateRecording(blobUrl) {
+  requireBlobStorage();
+  const safeUrl = validatePrivateBlobUrl(blobUrl);
+  let lastError;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const result = await get(safeUrl, { access: "private", useCache: false });
+      if (result?.statusCode === 200 && result.stream) return result;
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 500 * (2 ** attempt)));
+  }
+  if (lastError) console.warn(`Private recording read failed after retries: ${lastError.message}`);
+  const error = new Error("The recording uploaded, but private storage was not ready to read it. Please try once more.");
+  error.status = 502;
+  throw error;
+}
+
+function runFfmpeg(args) {
+  if (!ffmpegPath) throw new Error("The audio converter is not available in this deployment.");
+  return new Promise((resolve, reject) => {
+    const process = spawn(ffmpegPath, args, { windowsHide: true });
+    let stderr = "";
+    process.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+      if (stderr.length > 8000) stderr = stderr.slice(-8000);
+    });
+    process.once("error", reject);
+    process.once("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Audio preparation failed${stderr.trim() ? `: ${stderr.trim()}` : "."}`));
+    });
+  });
+}
+
+async function prepareGroqChunks(blobUrl, filename) {
+  const recording = await getPrivateRecording(blobUrl);
+  normalizeUploadInput({
+    filename,
+    mimeType: recording.blob.contentType || "application/octet-stream",
+    size: recording.blob.size,
+  });
+
+  const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "mccia-groq-"));
+  try {
+    const inputExtension = path.extname(filename).toLowerCase().replace(/[^.a-z0-9]/g, "") || ".audio";
+    const inputPath = path.join(tempDirectory, `source${inputExtension}`);
+    await pipeline(recording.stream, createWriteStream(inputPath));
+
+    const outputPattern = path.join(tempDirectory, "chunk-%03d.mp3");
+    await runFfmpeg([
+      "-hide_banner", "-loglevel", "error", "-i", inputPath,
+      "-vn", "-map_metadata", "-1", "-ac", "1", "-ar", "16000", "-b:a", "32k",
+      "-f", "segment", "-segment_time", String(GROQ_CHUNK_SECONDS), "-reset_timestamps", "1",
+      outputPattern,
+    ]);
+
+    const chunkPaths = (await fs.readdir(tempDirectory))
+      .filter((name) => /^chunk-\d{3}\.mp3$/.test(name))
+      .sort()
+      .map((name) => path.join(tempDirectory, name));
+    if (!chunkPaths.length) throw new Error("The recording could not be divided into transcription chunks.");
+    for (const chunkPath of chunkPaths) {
+      const details = await fs.stat(chunkPath);
+      if (!details.size || details.size > GROQ_MAX_CHUNK_BYTES) {
+        throw new Error("An audio chunk exceeds Groq's 25 MB free-plan limit. Reduce GROQ_CHUNK_MINUTES and try again.");
+      }
+    }
+    return { tempDirectory, chunkPaths };
+  } catch (error) {
+    await removeAudioTempDirectory(tempDirectory).catch(() => {});
+    throw error;
+  }
+}
+
+async function removeAudioTempDirectory(tempDirectory) {
+  if (!tempDirectory) return;
+  const safeRoot = path.resolve(os.tmpdir());
+  const safeTarget = path.resolve(tempDirectory);
+  if (safeTarget === safeRoot || !safeTarget.startsWith(`${safeRoot}${path.sep}`) || !path.basename(safeTarget).startsWith("mccia-groq-")) {
+    console.warn("Refused to remove an unexpected audio temporary directory.");
+    return;
+  }
+  await fs.rm(safeTarget, { recursive: true, force: true });
+}
+
+async function transcribeGroqChunk(chunkPath) {
+  const audio = await fs.readFile(chunkPath);
+  const form = new FormData();
+  form.append("file", new Blob([audio], { type: "audio/mpeg" }), path.basename(chunkPath));
+  form.append("model", GROQ_TRANSCRIPTION_MODEL);
+  form.append("response_format", "verbose_json");
+  form.append("timestamp_granularities[]", "segment");
+  form.append("temperature", "0");
+  form.append("prompt", "This is an MCCIA meeting. Preserve Hindi and Marathi in Devanagari and English words in English. Transcribe faithfully; do not translate or summarize.");
+  return withGroqRetry(() => groqRequest(`${GROQ_API_BASE}/audio/transcriptions`, {
+    method: "POST",
+    body: form,
+  }));
+}
+
+async function mapWithConcurrency(items, concurrency, operation) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await operation(items[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+  return results;
+}
+
 async function waitForGeminiFile(file) {
   if (!file?.name) throw new Error("Gemini returned incomplete file metadata.");
   let current = file;
@@ -535,6 +716,48 @@ async function transcribe(request, response) {
   });
 }
 
+async function transcribeWithGroq(request, response) {
+  requireGroqKey();
+  const input = parseJsonBody(await readBody(request, 32 * 1024));
+  const blobUrl = validatePrivateBlobUrl(input?.blobUrl);
+  const filename = path.basename(String(input?.filename || "recording.webm")).slice(0, 200);
+  const durationSeconds = Math.max(0, Number(input?.durationSeconds) || 0);
+  let prepared;
+
+  try {
+    prepared = await prepareGroqChunks(blobUrl, filename);
+    const chunkResults = await mapWithConcurrency(
+      prepared.chunkPaths,
+      GROQ_CHUNK_CONCURRENCY,
+      (chunkPath) => transcribeGroqChunk(chunkPath),
+    );
+    const normalized = combineGroqTranscriptions(chunkResults, GROQ_CHUNK_SECONDS, durationSeconds);
+    if (!normalized.text) throw new Error("Groq Whisper returned an empty transcript.");
+
+    sendJson(response, 200, {
+      ...normalized,
+      filename,
+      dominantLanguages: normalized.detectedLanguages.length
+        ? normalized.detectedLanguages.join(", ")
+        : "Auto-detected by Groq Whisper",
+      audioQuality: normalized.segments.length ? "Processable" : "Limited transcript detail",
+      model: GROQ_TRANSCRIPTION_MODEL,
+      provider: "Groq Whisper",
+      transcriptionMode: "chunked-segment-timestamps",
+      chunkCount: prepared.chunkPaths.length,
+      diarizationAvailable: false,
+    });
+  } catch (error) {
+    if (Number(error?.status) === 429) {
+      error.message = "Groq's free transcription allowance is temporarily exhausted. Please wait for the limit to reset and try again.";
+    }
+    throw error;
+  } finally {
+    await removeAudioTempDirectory(prepared?.tempDirectory).catch((error) => console.warn(`Could not remove temporary audio: ${error.message}`));
+    await deletePrivateBlob(blobUrl);
+  }
+}
+
 async function transcribeWithWhisper(request, response) {
   const apiKey = requireOpenAIKey();
   const mimeType = String(request.headers["content-type"] || "application/octet-stream").split(";")[0];
@@ -593,14 +816,34 @@ async function generateDocument(request, response) {
     throw error;
   }
 
-  const result = await generateWithGeminiFallback(DOCUMENT_MODEL, DOCUMENT_FALLBACK_MODELS, {
-    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-    contents: [{ role: "user", parts: [{ text: buildDocumentRequest(input) }] }],
-  }, "document generation");
+  let payload;
+  try {
+    payload = await withGroqRetry(() => groqRequest(`${GROQ_API_BASE}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: GROQ_DOCUMENT_MODEL,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: buildDocumentRequest(input) },
+        ],
+        temperature: 0.1,
+        max_completion_tokens: 8_192,
+        tool_choice: "none",
+        citation_options: "disabled",
+        compound_custom: { tools: { enabled_tools: [] } },
+      }),
+    }));
+  } catch (error) {
+    if (Number(error?.status) === 429) {
+      error.message = "Groq's free document-generation allowance is temporarily exhausted. Your transcript is safe on the review screen; please try again after the limit resets.";
+    }
+    throw error;
+  }
 
-  const document = extractGeminiText(result.raw);
-  if (!document) throw new Error("The model returned no document text.");
-  sendJson(response, 200, { document, model: result.model, provider: "Google Gemini" });
+  const document = String(payload?.choices?.[0]?.message?.content || "").trim();
+  if (!document) throw new Error("Groq returned no document text.");
+  sendJson(response, 200, { document, model: GROQ_DOCUMENT_MODEL, provider: "Groq" });
 }
 
 async function serveStatic(request, response, pathname) {
@@ -632,15 +875,14 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/api/health") {
       sendJson(response, 200, {
         ok: true,
-        configured: Boolean(process.env.GEMINI_API_KEY),
+        configured: Boolean(process.env.GROQ_API_KEY),
         blobConfigured: Boolean(blobUploadMode()),
         blobUploadMode: blobUploadMode(),
-        whisperConfigured: Boolean(process.env.OPENAI_API_KEY),
         agent: AGENT_NAME,
-        provider: "Google Gemini",
-        modelProfile: GEMINI_MODEL_PROFILE,
+        provider: "Groq",
         maxUploadMb: Math.round(MAX_UPLOAD_BYTES / 1024 / 1024),
-        models: { transcription: TRANSCRIPTION_MODEL, longAudio: LONG_AUDIO_MODEL, longAudioFallbacks: LONG_AUDIO_FALLBACK_MODELS, whisper: WHISPER_MODEL, document: DOCUMENT_MODEL, documentFallbacks: DOCUMENT_FALLBACK_MODELS },
+        chunkMinutes: GROQ_CHUNK_SECONDS / 60,
+        models: { transcription: GROQ_TRANSCRIPTION_MODEL, document: GROQ_DOCUMENT_MODEL },
         release: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || "local",
       });
       return;
@@ -650,7 +892,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/transcribe") {
-      await transcribe(request, response);
+      await transcribeWithGroq(request, response);
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/transcribe/whisper") {
@@ -674,7 +916,7 @@ const server = http.createServer(async (request, response) => {
 
 server.listen(PORT, () => {
   console.log(`${AGENT_NAME} is ready at http://localhost:${PORT}`);
-  if (!process.env.GEMINI_API_KEY) console.log("Add GEMINI_API_KEY to .env to enable transcription and document generation.");
+  if (!process.env.GROQ_API_KEY) console.log("Add GROQ_API_KEY to .env to enable transcription and document generation.");
 });
 
 async function loadLocalEnv(filePath) {

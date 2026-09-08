@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { extractGeminiText, extractResponseText, formatTimestamp, normalizeGeminiTranscription, normalizeLongAudioTranscript, normalizeTranscription, safeDownloadName } from "../lib/core.js";
+import { combineGroqTranscriptions, extractGeminiText, extractResponseText, formatTimestamp, normalizeGeminiTranscription, normalizeLongAudioTranscript, normalizeTranscription, safeDownloadName } from "../lib/core.js";
 
 test("formatTimestamp produces full HH:MM:SS timestamps", () => {
   assert.equal(formatTimestamp(0), "00:00:00");
@@ -52,6 +52,18 @@ test("normalizeGeminiTranscription maps annotated speaker turns", () => {
 
 test("extractGeminiText joins model text parts", () => {
   assert.equal(extractGeminiText({ candidates: [{ content: { parts: [{ text: "One" }, { text: "Two" }] } }] }), "One\nTwo");
+});
+
+test("combineGroqTranscriptions offsets timestamps across audio chunks", () => {
+  const result = combineGroqTranscriptions([
+    { language: "en", text: "First", segments: [{ start: 2, end: 5, text: "First" }] },
+    { language: "hi", text: "दूसरा", segments: [{ start: 1, end: 4, text: "दूसरा" }] },
+  ], 900, 1800);
+
+  assert.equal(result.text, "[00:00:02] Speaker 1: First\n[00:15:01] Speaker 1: दूसरा");
+  assert.equal(result.durationLabel, "00:30:00");
+  assert.deepEqual(result.detectedLanguages, ["en", "hi"]);
+  assert.equal(result.speakerCount, 1);
 });
 
 test("normalizeLongAudioTranscript preserves timestamped speaker turns", () => {
