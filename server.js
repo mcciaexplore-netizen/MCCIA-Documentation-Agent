@@ -223,7 +223,13 @@ async function importFirefliesMeeting(request, response) {
   const normalized = normalizeFirefliesTranscript(transcript);
   if (!normalized.text) throw new Error("This Fireflies meeting does not contain a completed transcript yet.");
   sendJson(response, 200, {
-    ...normalized,
+    text: normalized.text,
+    duration: normalized.duration,
+    durationLabel: normalized.durationLabel,
+    speakerCount: normalized.speakerCount,
+    speakers: normalized.speakers,
+    title: normalized.title,
+    meetingDate: normalized.meetingDate,
     filename: `${normalized.title}.fireflies`,
     dominantLanguages: "Imported from Fireflies",
     audioQuality: "Fireflies transcript available",

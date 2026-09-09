@@ -6829,8 +6829,11 @@ ${newlined}
           ...formValues(),
           transcript,
           metadata: {
-            ...state.transcription,
-            filename: state.file?.name || state.transcription?.filename
+            filename: state.file?.name || state.transcription?.filename,
+            durationLabel: state.transcription?.durationLabel,
+            speakerCount: state.transcription?.speakerCount,
+            dominantLanguages: state.transcription?.dominantLanguages,
+            audioQuality: state.transcription?.audioQuality
           }
         })
       });
