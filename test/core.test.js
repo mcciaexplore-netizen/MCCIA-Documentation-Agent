@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { combineGroqTranscriptions, extractGeminiText, extractResponseText, firefliesTranscriptId, formatTimestamp, normalizeFirefliesTranscript, normalizeGeminiTranscription, normalizeLongAudioTranscript, normalizeTranscription, safeDownloadName } from "../lib/core.js";
+import { combineGroqTranscriptions, extractGeminiText, extractResponseText, firefliesTranscriptId, formatTimestamp, normalizeFirefliesTranscript, normalizeGeminiTranscription, normalizeLongAudioTranscript, normalizeTranscription, safeDownloadName, splitTranscriptForModel } from "../lib/core.js";
 
 test("formatTimestamp produces full HH:MM:SS timestamps", () => {
   assert.equal(formatTimestamp(0), "00:00:00");
@@ -95,4 +95,12 @@ test("normalizeLongAudioTranscript preserves timestamped speaker turns", () => {
 
 test("safeDownloadName removes unsafe filename characters", () => {
   assert.equal(safeDownloadName("Meeting: Pune / Q3"), "meeting-pune-q3.md");
+});
+
+test("splitTranscriptForModel keeps long transcripts within the model batch size", () => {
+  const transcript = Array.from({ length: 200 }, (_, index) => `[00:00:${String(index % 60).padStart(2, "0")}] Speaker 1: Discussion item ${index}.`).join("\n");
+  const chunks = splitTranscriptForModel(transcript, 2_000);
+  assert.ok(chunks.length > 1);
+  assert.ok(chunks.every((chunk) => chunk.length <= 2_000));
+  assert.equal(chunks.join("\n").replace(/\s+/g, " "), transcript.replace(/\s+/g, " "));
 });
