@@ -16,6 +16,7 @@ import { AGENT_NAME, buildDocumentRequest, buildFollowupRequest, FOLLOWUP_SYSTEM
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, "public");
+const ASSETS_DIR = path.join(ROOT, "assets");
 
 await loadLocalEnv(path.join(ROOT, ".env"));
 
@@ -62,6 +63,7 @@ const mimeTypes = {
   ".json": "application/json; charset=utf-8",
   ".png": "image/png",
   ".svg": "image/svg+xml",
+  ".ttf": "font/ttf",
 };
 
 function sendJson(response, status, value) {
@@ -1095,8 +1097,11 @@ async function downloadPdf(request, response) {
 async function serveStatic(request, response, pathname) {
   const requested = pathname === "/" ? "/index.html" : pathname;
   const decoded = decodeURIComponent(requested);
-  const filePath = path.resolve(PUBLIC_DIR, `.${decoded}`);
-  if (!filePath.startsWith(`${PUBLIC_DIR}${path.sep}`)) {
+  const servesAsset = decoded.startsWith("/assets/");
+  const baseDirectory = servesAsset ? ASSETS_DIR : PUBLIC_DIR;
+  const relativePath = servesAsset ? decoded.slice("/assets".length) : decoded;
+  const filePath = path.resolve(baseDirectory, `.${relativePath}`);
+  if (!filePath.startsWith(`${baseDirectory}${path.sep}`)) {
     sendJson(response, 403, { error: "Forbidden" });
     return;
   }

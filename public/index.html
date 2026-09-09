@@ -6,7 +6,7 @@
     <meta name="description" content="The MCCIA Documentation Agent turns Hindi, English, Marathi, and mixed-language recordings into trustworthy Chamber documents." />
     <title>MCCIA — Meeting documentation</title>
     <link rel="icon" type="image/png" href="/mccia-logo.png" />
-    <link rel="stylesheet" href="/styles.css?v=3" />
+    <link rel="stylesheet" href="/styles.css?v=4" />
   </head>
   <body>
     <a class="skip-link" href="#workflow">Skip to document workflow</a>
@@ -14,19 +14,28 @@
     <header class="topbar">
       <a class="brand" href="/" aria-label="MCCIA Documentation Agent home">
         <span class="mccia-logo" aria-hidden="true"><img src="/mccia-logo.png" alt="" /></span>
-        <span class="brand-label">Documentation Agent</span>
+        <span class="brand-label"><strong>Documentation Agent</strong><small>Mahratta Chamber of Commerce, Industries and Agriculture</small></span>
       </a>
-      <div class="status" id="api-status"><span class="status-dot"></span><span>Checking setup…</span></div>
+      <div class="topbar-meta"><span class="workspace-label">Private workspace</span><div class="status" id="api-status"><span class="status-dot"></span><span>Checking setup…</span></div></div>
     </header>
 
     <main>
-      <section class="hero">
-        <p class="eyebrow">MCCIA MULTILINGUAL DOCUMENTATION AGENT</p>
-        <h1>Every meeting captured.<br />Every action made clear.</h1>
-        <p class="hero-copy">Built for the Mahratta Chamber of Commerce, Industries and Agriculture. Turn committee meetings, member discussions, workshops, policy interactions, and field visits into dependable documents.</p>
-        <div class="language-row" aria-label="Supported languages">
-          <span>हिंदी</span><i></i><span>English</span><i></i><span>मराठी</span>
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-main">
+          <p class="eyebrow"><span></span>MCCIA MEETING INTELLIGENCE</p>
+          <h1 id="hero-title">From conversation<br />to <em>clear action.</em></h1>
+          <div class="language-row" aria-label="Supported languages">
+            <span>हिंदी</span><i></i><span>English</span><i></i><span>मराठी</span>
+          </div>
         </div>
+        <aside class="hero-aside">
+          <p class="hero-copy">Turn committee meetings, member discussions, workshops, policy interactions, and field visits into dependable documents.</p>
+          <dl class="hero-facts">
+            <div><dt>3</dt><dd>languages,<br />mixed naturally</dd></div>
+            <div><dt>90+</dt><dd>minute recordings,<br />processed in chunks</dd></div>
+            <div><dt>PDF</dt><dd>ready to share<br />and circulate</dd></div>
+          </dl>
+        </aside>
       </section>
 
       <section class="workspace" id="workflow" aria-label="Document workflow">
@@ -42,6 +51,7 @@
             <p>Choose the MCCIA output, then add your recording. Groq Whisper handles long multilingual audio in secure chunks.</p>
           </div>
 
+          <div class="section-label"><span>01</span><strong>Choose the output</strong><small>Select the document you need after the meeting.</small></div>
           <div class="document-types" role="radiogroup" aria-label="Document type">
             <label class="type-card selected"><input type="radio" name="document-type" value="minutes" checked /><span class="type-icon">M</span><strong>MCCIA minutes</strong><small>Committee, decisions, owners & deadlines</small></label>
             <label class="type-card"><input type="radio" name="document-type" value="report" /><span class="type-icon">R</span><strong>MCCIA report</strong><small>Policy, event, visit & stakeholder reports</small></label>
@@ -59,6 +69,7 @@
             <fieldset class="blank-policy"><legend>If a section was not discussed</legend><label><input type="radio" name="blank-policy" value="not-discussed" checked /> Write “Not discussed in recording”</label><label><input type="radio" name="blank-policy" value="blank" /> Leave it blank</label></fieldset>
           </div>
 
+          <div class="section-label source-label"><span>02</span><strong>Add the meeting source</strong><small>Record now, upload a file, or bring in a Fireflies meeting.</small></div>
           <section class="recorder" aria-label="Record audio">
             <div class="recorder-copy">
               <span class="recorder-icon" aria-hidden="true"></span>
