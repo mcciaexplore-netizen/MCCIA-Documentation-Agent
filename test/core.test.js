@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { combineGroqTranscriptions, extractGeminiText, extractResponseText, formatTimestamp, normalizeGeminiTranscription, normalizeLongAudioTranscript, normalizeTranscription, safeDownloadName } from "../lib/core.js";
+import { combineGroqTranscriptions, extractGeminiText, extractResponseText, firefliesTranscriptId, formatTimestamp, normalizeFirefliesTranscript, normalizeGeminiTranscription, normalizeLongAudioTranscript, normalizeTranscription, safeDownloadName } from "../lib/core.js";
 
 test("formatTimestamp produces full HH:MM:SS timestamps", () => {
   assert.equal(formatTimestamp(0), "00:00:00");
@@ -64,6 +64,25 @@ test("combineGroqTranscriptions offsets timestamps across audio chunks", () => {
   assert.equal(result.durationLabel, "00:30:00");
   assert.deepEqual(result.detectedLanguages, ["en", "hi"]);
   assert.equal(result.speakerCount, 1);
+});
+
+test("firefliesTranscriptId reads Fireflies view links safely", () => {
+  assert.equal(firefliesTranscriptId("https://app.fireflies.ai/view/Weekly-Sync::abc_DEF-123"), "abc_DEF-123");
+  assert.equal(firefliesTranscriptId("https://example.com/view/Weekly-Sync::abc_DEF-123"), "");
+});
+
+test("normalizeFirefliesTranscript preserves named speakers and timestamps", () => {
+  const result = normalizeFirefliesTranscript({
+    title: "Committee review",
+    sentences: [
+      { index: 1, speaker_name: "Priya", start_time: "2.5", end_time: "7.5", text: "नमस्ते everyone." },
+      { index: 2, speaker_name: "Aarushi", start_time: "8", end_time: "12", text: "Let us begin." },
+    ],
+  });
+  assert.equal(result.title, "Committee review");
+  assert.equal(result.durationLabel, "00:00:12");
+  assert.deepEqual(result.speakers, ["Priya", "Aarushi"]);
+  assert.match(result.text, /\[00:00:02\] Priya: नमस्ते everyone\./);
 });
 
 test("normalizeLongAudioTranscript preserves timestamped speaker turns", () => {

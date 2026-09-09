@@ -6517,7 +6517,8 @@ ${newlined}
     recordingUrl: "",
     durationPromise: null,
     blobConfigured: false,
-    blobUploadMode: ""
+    blobUploadMode: "",
+    firefliesConfigured: false
   };
   var $ = (selector) => document.querySelector(selector);
   var $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -6538,7 +6539,7 @@ ${newlined}
   }
   function readAudioDuration(file) {
     return new Promise((resolve) => {
-      const audio = document.createElement("audio");
+      const audio = document.createElement(file.type.startsWith("video/") ? "video" : "audio");
       const url = URL.createObjectURL(file);
       let settled = false;
       const finish = (duration = 0) => {
@@ -6577,8 +6578,8 @@ ${newlined}
       state.file = null;
       transcribeButton.disabled = true;
       uploadZone.classList.remove("has-file");
-      $("#upload-title").textContent = "Drop a recording here";
-      $("#upload-detail").textContent = "Click to choose MP3, M4A, WAV, WebM, OGG, or FLAC";
+      $("#upload-title").textContent = "Drop an audio or video recording here";
+      $("#upload-detail").textContent = "Choose MP3, M4A, WAV, WebM, OGG, FLAC, MP4, MOV, or MKV";
     }
   }
   async function startRecording() {
@@ -6670,9 +6671,9 @@ ${newlined}
   }
   function chooseFile(file, knownDuration = 0) {
     if (!file) return;
-    const supported = file.type.startsWith("audio/") || /\.(mp3|mpeg|mpga|m4a|wav|webm|ogg|flac|aac|aiff|opus)$/i.test(file.name);
+    const supported = file.type.startsWith("audio/") || file.type.startsWith("video/") || /\.(mp3|mpeg|mpga|m4a|wav|webm|ogg|flac|aac|aiff|opus|mp4|mov|mkv)$/i.test(file.name);
     if (!supported) {
-      toast("Please choose a supported audio file such as MP3, M4A, WAV, WebM, OGG, or FLAC.", true);
+      toast("Please choose a supported audio or video file such as MP3, M4A, WAV, WebM, MP4, MOV, or MKV.", true);
       return;
     }
     state.file = file;
@@ -6686,6 +6687,51 @@ ${newlined}
       if (state.file !== selectedFile || !duration) return;
       $("#upload-detail").textContent = `${(file.size / 1024 / 1024).toFixed(1)} MB \xB7 ${formatRecordingTime(duration * 1e3)} \xB7 Ready to transcribe`;
     });
+  }
+  async function importFireflies() {
+    const meetingUrl = $("#fireflies-url").value.trim();
+    if (!meetingUrl) {
+      toast("Paste a Fireflies meeting link first.", true);
+      $("#fireflies-url").focus();
+      return;
+    }
+    const values = formValues();
+    if (values.documentType === "template" && !values.template) {
+      toast("Paste a template before continuing.", true);
+      $("#template").focus();
+      return;
+    }
+    if (!state.firefliesConfigured) {
+      toast("Fireflies import needs FIREFLIES_API_KEY in the Vercel environment.", true);
+      return;
+    }
+    setBusy(true, "Importing Fireflies transcript\u2026", "Loading the meeting's timestamps and speaker names securely.");
+    try {
+      const data = await request("/api/import/fireflies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: meetingUrl })
+      });
+      state.file = null;
+      fileInput.value = "";
+      transcribeButton.disabled = true;
+      uploadZone.classList.remove("has-file");
+      $("#upload-title").textContent = "Drop an audio or video recording here";
+      $("#upload-detail").textContent = "Choose MP3, M4A, WAV, WebM, OGG, FLAC, MP4, MOV, or MKV";
+      state.transcription = data;
+      $("#transcript").value = data.text;
+      renderMetadata(data);
+      if ($("#skip-review").checked) {
+        const generated = await generate();
+        if (!generated) goToStep(2);
+      } else {
+        goToStep(2);
+      }
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      setBusy(false);
+    }
   }
   function formValues() {
     return {
@@ -6784,7 +6830,7 @@ ${newlined}
           transcript,
           metadata: {
             ...state.transcription,
-            filename: state.file?.name
+            filename: state.file?.name || state.transcription?.filename
           }
         })
       });
@@ -6812,8 +6858,9 @@ ${newlined}
     fileInput.value = "";
     $("#transcript").value = "";
     $("#document-output").textContent = "";
-    $("#upload-title").textContent = "Drop a recording here";
-    $("#upload-detail").textContent = "Click to choose MP3, M4A, WAV, WebM, OGG, or FLAC";
+    $("#upload-title").textContent = "Drop an audio or video recording here";
+    $("#upload-detail").textContent = "Choose MP3, M4A, WAV, WebM, OGG, FLAC, MP4, MOV, or MKV";
+    $("#fireflies-url").value = "";
     uploadZone.classList.remove("has-file");
     transcribeButton.disabled = true;
     goToStep(1);
@@ -6823,6 +6870,8 @@ ${newlined}
       const data = await request("/api/health");
       state.blobConfigured = Boolean(data.blobConfigured);
       state.blobUploadMode = data.blobUploadMode || "";
+      state.firefliesConfigured = Boolean(data.firefliesConfigured);
+      $("#fireflies-help").textContent = state.firefliesConfigured ? "Uses the transcript and speaker names already available in Fireflies." : "Setup needed: add FIREFLIES_API_KEY to Vercel to enable meeting-link imports.";
       const element = $("#api-status");
       const fullyConfigured = Boolean(data.configured && data.blobConfigured);
       element.classList.toggle("ready", fullyConfigured);
@@ -6851,6 +6900,7 @@ ${newlined}
   $("#stop-button").addEventListener("click", stopRecording);
   $("#discard-recording").addEventListener("click", () => discardRecording());
   transcribeButton.addEventListener("click", transcribe);
+  $("#fireflies-import-button").addEventListener("click", importFireflies);
   generateButton.addEventListener("click", generate);
   $$(`[data-back]`).forEach((button) => button.addEventListener("click", () => goToStep(Number(button.dataset.back))));
   $("#new-recording").addEventListener("click", reset);
@@ -6866,6 +6916,34 @@ ${newlined}
     link.download = `mccia-${type}-${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.md`;
     link.click();
     URL.revokeObjectURL(link.href);
+  });
+  $("#download-pdf-button").addEventListener("click", async () => {
+    if (!state.document) return;
+    setBusy(true, "Preparing PDF\u2026", "Formatting the document with page breaks, tables, and multilingual fonts.");
+    try {
+      const type = $("input[name='document-type']:checked").value;
+      const titleLine = state.document.split(/\r?\n/).map((line) => line.replace(/^#+\s*/, "").trim()).find(Boolean);
+      const response = await fetch("/api/pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ document: state.document, title: titleLine || `MCCIA ${type}` })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `PDF download failed (${response.status})`);
+      }
+      const blob = await response.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `mccia-${type}-${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.pdf`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      toast("PDF downloaded.");
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      setBusy(false);
+    }
   });
   $$(`[data-followup]`).forEach((button) => button.addEventListener("click", () => {
     const messages = {

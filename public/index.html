@@ -74,14 +74,21 @@
             </div>
           </section>
 
-          <div class="or-divider"><span>or upload a file</span></div>
+          <div class="or-divider"><span>or upload audio / video</span></div>
 
           <label class="upload-zone" id="upload-zone">
-            <input id="audio-file" type="file" accept="audio/*,.mp3,.mpeg,.mpga,.m4a,.wav,.webm,.ogg,.flac,.aac,.aiff,.opus" />
+            <input id="audio-file" type="file" accept="audio/*,video/*,.mp3,.mpeg,.mpga,.m4a,.wav,.webm,.ogg,.flac,.aac,.aiff,.opus,.mp4,.mov,.mkv" />
             <span class="upload-glyph" aria-hidden="true">↑</span>
-            <strong id="upload-title">Drop a recording here</strong>
-            <span id="upload-detail">Click to choose MP3, M4A, WAV, WebM, OGG, or FLAC</span>
+            <strong id="upload-title">Drop an audio or video recording here</strong>
+            <span id="upload-detail">Choose MP3, M4A, WAV, WebM, OGG, FLAC, MP4, MOV, or MKV</span>
           </label>
+
+          <div class="or-divider"><span>or import from Fireflies</span></div>
+          <section class="fireflies-import" aria-label="Import a Fireflies meeting transcript">
+            <label class="field"><span>Fireflies meeting link</span><input id="fireflies-url" type="url" placeholder="https://app.fireflies.ai/view/Meeting-Title::meeting-id" /></label>
+            <button class="secondary" id="fireflies-import-button" type="button">Import transcript <span>→</span></button>
+            <small id="fireflies-help">Uses the transcript and speaker names already available in Fireflies.</small>
+          </section>
 
           <div class="actions"><label class="switch"><input id="skip-review" type="checkbox" /><span></span> “Just do it” — skip transcript review</label><button class="primary" id="transcribe-button" disabled>Transcribe recording <span>→</span></button></div>
         </div>
@@ -102,7 +109,7 @@
             <div><span class="kicker">STEP 03</span><h2>Your document is ready</h2></div>
             <p>Review the result, then copy or download it as Markdown.</p>
           </div>
-          <div class="document-toolbar"><span id="document-model"></span><div><button class="text-button" id="copy-button">Copy</button><button class="text-button" id="download-button">Download .md</button></div></div>
+          <div class="document-toolbar"><span id="document-model"></span><div><button class="text-button" id="copy-button">Copy</button><button class="text-button" id="download-button">Download .md</button><button class="text-button" id="download-pdf-button">Download PDF</button></div></div>
           <article class="document-output" id="document-output"></article>
           <div class="follow-ups"><p>I can also:</p><div><button data-followup="translate">1) Translate into Hindi / Marathi / English</button><button data-followup="executive">2) Create a shorter executive version</button><button data-followup="email">3) Draft the email to attendees</button></div></div>
           <div class="actions"><button class="secondary" id="new-recording">＋ New recording</button></div>
@@ -113,6 +120,6 @@
     </main>
 
     <div class="toast" id="toast" role="alert"></div>
-    <script src="/app.bundle.js?v=18" defer></script>
+    <script src="/app.bundle.js?v=19" defer></script>
   </body>
 </html>

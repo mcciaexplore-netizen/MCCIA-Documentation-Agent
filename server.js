@@ -9,7 +9,8 @@ import { fileURLToPath } from "node:url";
 import { del, get, issueSignedToken } from "@vercel/blob";
 import { handleUpload, handleUploadPresigned } from "@vercel/blob/client";
 import ffmpegPath from "ffmpeg-static";
-import { combineGroqTranscriptions, extractGeminiText, normalizeGeminiTranscription, normalizeLongAudioTranscript, normalizeTranscription } from "./lib/core.js";
+import { combineGroqTranscriptions, extractGeminiText, firefliesTranscriptId, normalizeFirefliesTranscript, normalizeGeminiTranscription, normalizeLongAudioTranscript, normalizeTranscription, safeDownloadName } from "./lib/core.js";
+import { createDocumentPdf } from "./lib/pdf.js";
 import { AGENT_NAME, buildDocumentRequest, SYSTEM_PROMPT } from "./lib/prompts.js";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -22,6 +23,7 @@ const MAX_UPLOAD_BYTES = (Number(process.env.MAX_AUDIO_UPLOAD_MB) || 200) * 1024
 const GROQ_TRANSCRIPTION_MODEL = process.env.GROQ_TRANSCRIPTION_MODEL || "whisper-large-v3-turbo";
 const GROQ_DOCUMENT_MODEL = process.env.GROQ_DOCUMENT_MODEL || "groq/compound-mini";
 const GROQ_API_BASE = "https://api.groq.com/openai/v1";
+const FIREFLIES_API_URL = "https://api.fireflies.ai/graphql";
 const GROQ_MAX_CHUNK_BYTES = 24 * 1024 * 1024;
 const GROQ_CHUNK_SECONDS = Math.max(5 * 60, Math.min(20 * 60, Number(process.env.GROQ_CHUNK_MINUTES || 15) * 60));
 const GROQ_CHUNK_CONCURRENCY = Math.max(1, Math.min(4, Number(process.env.GROQ_CHUNK_CONCURRENCY) || 2));
@@ -66,6 +68,16 @@ function sendJson(response, status, value) {
   response.end(JSON.stringify(value));
 }
 
+function sendBuffer(response, status, buffer, contentType, filename) {
+  response.writeHead(status, {
+    "Content-Type": contentType,
+    "Content-Length": String(buffer.length),
+    "Content-Disposition": `attachment; filename="${filename}"`,
+    "Cache-Control": "no-store",
+  });
+  response.end(buffer);
+}
+
 async function readBody(request, limit = 1024 * 1024) {
   const chunks = [];
   let size = 0;
@@ -106,6 +118,15 @@ function requireGroqKey() {
     throw error;
   }
   return process.env.GROQ_API_KEY;
+}
+
+function requireFirefliesKey() {
+  if (!process.env.FIREFLIES_API_KEY) {
+    const error = new Error("Fireflies import is not configured yet. Add FIREFLIES_API_KEY to the Vercel environment, then redeploy.");
+    error.status = 503;
+    throw error;
+  }
+  return process.env.FIREFLIES_API_KEY;
 }
 
 function retryAfterMs(response) {
@@ -151,6 +172,66 @@ async function withGroqRetry(operation, attempts = 4) {
     }
   }
   throw lastError;
+}
+
+async function fetchFirefliesTranscript(transcriptId) {
+  const query = `query Transcript($transcriptId: String!) {
+    transcript(id: $transcriptId) {
+      id
+      title
+      date
+      dateString
+      duration
+      participants
+      speakers { id name }
+      sentences { index speaker_name speaker_id text raw_text start_time end_time }
+    }
+  }`;
+  const response = await fetch(FIREFLIES_API_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${requireFirefliesKey()}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ query, variables: { transcriptId } }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  const apiError = Array.isArray(payload?.errors) ? payload.errors[0] : null;
+  if (!response.ok || apiError) {
+    const error = new Error(apiError?.message || `Fireflies import failed (${response.status}).`);
+    error.status = response.status === 200 ? 400 : response.status;
+    throw error;
+  }
+  if (!payload?.data?.transcript) {
+    const error = new Error("The Fireflies meeting was not found or is not accessible with this API key.");
+    error.status = 404;
+    throw error;
+  }
+  return payload.data.transcript;
+}
+
+async function importFirefliesMeeting(request, response) {
+  const input = parseJsonBody(await readBody(request, 64 * 1024));
+  const transcriptId = firefliesTranscriptId(input?.url || input?.transcriptId);
+  if (!transcriptId) {
+    const error = new Error("Paste a valid Fireflies transcript link, such as an app.fireflies.ai/view link.");
+    error.status = 400;
+    throw error;
+  }
+
+  const transcript = await fetchFirefliesTranscript(transcriptId);
+  const normalized = normalizeFirefliesTranscript(transcript);
+  if (!normalized.text) throw new Error("This Fireflies meeting does not contain a completed transcript yet.");
+  sendJson(response, 200, {
+    ...normalized,
+    filename: `${normalized.title}.fireflies`,
+    dominantLanguages: "Imported from Fireflies",
+    audioQuality: "Fireflies transcript available",
+    model: "Fireflies transcript",
+    provider: "Fireflies.ai",
+    transcriptionMode: "fireflies-import",
+    diarizationAvailable: true,
+  });
 }
 
 async function geminiRequest(url, options = {}) {
@@ -254,7 +335,7 @@ function normalizeUploadInput(input) {
   const filename = path.basename(String(input?.filename || "recording.webm")).slice(0, 200);
   const mimeType = String(input?.mimeType || "application/octet-stream").split(";")[0].slice(0, 100);
   const size = Number(input?.size);
-  const supportedExtension = /\.(mp3|mpeg|mpga|m4a|wav|webm|ogg|flac|aac|aiff|opus)$/i.test(filename);
+  const supportedExtension = /\.(mp3|mpeg|mpga|m4a|wav|webm|ogg|flac|aac|aiff|opus|mp4|mov|mkv)$/i.test(filename);
 
   if (!Number.isSafeInteger(size) || size <= 0) {
     const error = new Error("The uploaded audio file is empty or has an invalid size.");
@@ -267,7 +348,7 @@ function normalizeUploadInput(input) {
     throw error;
   }
   if (!mimeType.startsWith("audio/") && !supportedExtension) {
-    const error = new Error("Please choose a supported audio recording.");
+    const error = new Error("Please choose a supported audio or video recording.");
     error.status = 415;
     throw error;
   }
@@ -290,7 +371,7 @@ function blobUploadMode() {
 
 function validateBlobPath(pathname) {
   const normalizedPath = String(pathname || "").replace(/\\/g, "/");
-  if (!/^recordings\/[^/]+\.(mp3|mpeg|mpga|m4a|wav|webm|ogg|flac|aac|aiff|opus)$/i.test(normalizedPath)) {
+  if (!/^recordings\/[^/]+\.(mp3|mpeg|mpga|m4a|wav|webm|ogg|flac|aac|aiff|opus|mp4|mov|mkv)$/i.test(normalizedPath)) {
     const error = new Error("Unsupported recording filename.");
     error.status = 415;
     throw error;
@@ -301,7 +382,7 @@ function validateBlobPath(pathname) {
 async function createBlobUploadToken(request, response) {
   requireBlobStorage();
   const body = parseJsonBody(await readBody(request, 64 * 1024));
-  const allowedContentTypes = ["audio/*", "video/webm", "application/ogg", "application/octet-stream"];
+  const allowedContentTypes = ["audio/*", "video/*", "application/ogg", "application/octet-stream"];
   const result = blobUploadMode() === "oidc"
     ? await handleUploadPresigned({
         request,
@@ -846,6 +927,20 @@ async function generateDocument(request, response) {
   sendJson(response, 200, { document, model: GROQ_DOCUMENT_MODEL, provider: "Groq" });
 }
 
+async function downloadPdf(request, response) {
+  const input = parseJsonBody(await readBody(request, 1024 * 1024));
+  const documentText = String(input?.document || "").trim();
+  if (!documentText) {
+    const error = new Error("Generate a document before downloading a PDF.");
+    error.status = 400;
+    throw error;
+  }
+  const title = String(input?.title || "MCCIA Document").slice(0, 160);
+  const pdf = await createDocumentPdf(documentText, title);
+  const filename = safeDownloadName(title).replace(/\.md$/i, ".pdf");
+  sendBuffer(response, 200, pdf, "application/pdf", filename);
+}
+
 async function serveStatic(request, response, pathname) {
   const requested = pathname === "/" ? "/index.html" : pathname;
   const decoded = decodeURIComponent(requested);
@@ -878,6 +973,7 @@ const server = http.createServer(async (request, response) => {
         configured: Boolean(process.env.GROQ_API_KEY),
         blobConfigured: Boolean(blobUploadMode()),
         blobUploadMode: blobUploadMode(),
+        firefliesConfigured: Boolean(process.env.FIREFLIES_API_KEY),
         agent: AGENT_NAME,
         provider: "Groq",
         maxUploadMb: Math.round(MAX_UPLOAD_BYTES / 1024 / 1024),
@@ -895,12 +991,20 @@ const server = http.createServer(async (request, response) => {
       await transcribeWithGroq(request, response);
       return;
     }
+    if (request.method === "POST" && url.pathname === "/api/import/fireflies") {
+      await importFirefliesMeeting(request, response);
+      return;
+    }
     if (request.method === "POST" && url.pathname === "/api/transcribe/whisper") {
       await transcribeWithWhisper(request, response);
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/generate") {
       await generateDocument(request, response);
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/pdf") {
+      await downloadPdf(request, response);
       return;
     }
     if (request.method === "GET" || request.method === "HEAD") {
