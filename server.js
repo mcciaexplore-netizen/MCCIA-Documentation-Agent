@@ -10,6 +10,7 @@ import { del, get, issueSignedToken } from "@vercel/blob";
 import { handleUpload, handleUploadPresigned } from "@vercel/blob/client";
 import ffmpegPath from "ffmpeg-static";
 import { combineGroqTranscriptions, extractGeminiText, firefliesTranscriptId, normalizeFirefliesTranscript, normalizeGeminiTranscription, normalizeLongAudioTranscript, normalizeTranscription, safeDownloadName, splitTranscriptForModel } from "./lib/core.js";
+import { createQuotaFallbackDocument } from "./lib/fallback-document.js";
 import { createDocumentPdf } from "./lib/pdf.js";
 import { AGENT_NAME, buildDocumentRequest, SYSTEM_PROMPT } from "./lib/prompts.js";
 
@@ -988,7 +989,19 @@ async function generateDocument(request, response) {
     ]);
   } catch (error) {
     if (Number(error?.status) === 429) {
-      error.message = "Groq's free document-generation allowance is temporarily exhausted. Your transcript is safe on the review screen; please try again after the limit resets.";
+      if (input.documentType === "template") {
+        error.message = "Groq's free document-generation allowance is temporarily exhausted. Template filling needs the AI model; your transcript is safe, so please try again after the limit resets.";
+        throw error;
+      }
+      const document = createQuotaFallbackDocument(input);
+      sendJson(response, 200, {
+        document,
+        model: "timestamped extractive mode",
+        provider: "MCCIA quota-safe fallback",
+        processingMode: "groq-quota-fallback",
+        warning: "Groq's free allowance is exhausted, so MCCIA created a timestamp-grounded extractive document without inventing content.",
+      });
+      return;
     }
     throw error;
   }

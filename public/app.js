@@ -372,6 +372,7 @@ async function generate() {
     $("#document-output").textContent = data.document;
     $("#document-model").textContent = `Generated with ${data.provider || "Groq"} · ${data.model}`;
     goToStep(3);
+    if (data.warning) toast(data.warning);
     return true;
   } catch (error) {
     toast(error.message, true);

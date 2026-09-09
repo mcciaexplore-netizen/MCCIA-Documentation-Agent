@@ -53,6 +53,12 @@ Node.js 20 or newer is required. Production also needs a private Vercel Blob sto
 | `PORT` | `3000` | Local server port |
 | `MAX_AUDIO_UPLOAD_MB` | `200` | Maximum audio size accepted by private Blob upload and Groq processing |
 
+If Groq's free document-generation quota is temporarily exhausted, minutes, reports,
+summaries, and notes automatically use a local timestamp-grounded extractive mode.
+It keeps the workflow available without sending the transcript to another provider
+or inventing content. Exact template filling still waits for the Groq quota because
+it requires model-based section mapping.
+
 Every recording is converted server-side to 16 kHz mono MP3 and divided into 15-minute chunks. At 32 kbps these chunks are normally about 3.6 MB each, comfortably below Groq's 25 MB free-plan limit. Temporary Groq 408, 429, and 5xx errors are retried with exponential backoff. Source recordings and converted chunks are deleted immediately after processing.
 
 Groq Whisper provides timestamps but not speaker diarization. Until WhisperX is connected, the transcript uses `Speaker 1` and users can correct speaker names during the review step. A future `WhisperX + pyannote` service can be added without changing the document-generation workflow.
