@@ -9,6 +9,7 @@
     <link rel="stylesheet" href="/styles.css?v=3" />
   </head>
   <body>
+    <a class="skip-link" href="#workflow">Skip to document workflow</a>
     <div class="grain" aria-hidden="true"></div>
     <header class="topbar">
       <a class="brand" href="/" aria-label="MCCIA Documentation Agent home">
@@ -28,7 +29,7 @@
         </div>
       </section>
 
-      <section class="workspace" aria-label="Document workflow">
+      <section class="workspace" id="workflow" aria-label="Document workflow">
         <nav class="steps" aria-label="Progress">
           <button class="step active" data-step="1"><span>01</span> Intake</button>
           <button class="step" data-step="2" disabled><span>02</span> Review</button>
@@ -105,13 +106,27 @@
         </div>
 
         <div class="panel" id="step-3">
-          <div class="panel-heading">
+          <div class="panel-heading document-heading">
             <div><span class="kicker">STEP 03</span><h2>Your document is ready</h2></div>
-            <p>Review the result, then copy or download it as Markdown.</p>
+            <p>Review the result, create another version, or download a circulation-ready file.</p>
           </div>
-          <div class="document-toolbar"><span id="document-model"></span><div><button class="text-button" id="copy-button">Copy</button><button class="text-button" id="download-button">Download .md</button><button class="text-button" id="download-pdf-button">Download PDF</button></div></div>
+          <div class="document-toolbar">
+            <div class="document-provenance"><span class="variant-label" id="variant-label">Original document</span><span id="document-model"></span></div>
+            <div><button class="text-button hidden" id="restore-original">View original</button><button class="text-button" id="copy-button">Copy</button><button class="text-button" id="download-button">Download .md</button><button class="text-button strong" id="download-pdf-button">Download PDF</button></div>
+          </div>
           <article class="document-output" id="document-output"></article>
-          <div class="follow-ups"><p>I can also:</p><div><button data-followup="translate">1) Translate into Hindi / Marathi / English</button><button data-followup="executive">2) Create a shorter executive version</button><button data-followup="email">3) Draft the email to attendees</button></div></div>
+          <section class="document-tools" aria-labelledby="document-tools-title">
+            <div class="tools-heading"><div><span class="kicker">DOCUMENT TOOLS</span><h3 id="document-tools-title">Make the next version</h3></div><p>The original stays saved while you prepare a translated copy, leadership brief, or attendee email.</p></div>
+            <div class="tool-grid">
+              <button class="tool-card" data-followup="translate"><span class="tool-mark">अ</span><span><strong>Translate document</strong><small>Hindi, Marathi, or English</small></span><i>→</i></button>
+              <button class="tool-card" data-followup="executive"><span class="tool-mark">1P</span><span><strong>Executive version</strong><small>A concise one-page leadership brief</small></span><i>→</i></button>
+              <button class="tool-card" data-followup="email"><span class="tool-mark">@</span><span><strong>Email to attendees</strong><small>Subject, decisions, and action items</small></span><i>→</i></button>
+            </div>
+            <div class="translation-options hidden" id="translation-options">
+              <label class="field"><span>Translate the complete document into</span><select id="translation-language"><option>Hindi</option><option>Marathi</option><option>English</option></select></label>
+              <button class="primary" id="translate-confirm">Create translated copy <span>→</span></button>
+            </div>
+          </section>
           <div class="actions"><button class="secondary" id="new-recording">＋ New recording</button></div>
         </div>
 
@@ -119,7 +134,9 @@
       </section>
     </main>
 
+    <footer class="site-footer"><span>MCCIA Documentation Agent</span><p>Recordings and transcripts are processed only to create the requested document.</p></footer>
+
     <div class="toast" id="toast" role="alert"></div>
-    <script src="/app.bundle.js?v=19" defer></script>
+    <script src="/app.bundle.js?v=20" defer></script>
   </body>
 </html>

@@ -6509,6 +6509,10 @@ ${newlined}
     file: null,
     transcription: null,
     document: "",
+    baseDocument: "",
+    baseDocumentMeta: "",
+    activeVariant: "original",
+    maxStep: 1,
     recorder: null,
     mediaStream: null,
     recordingChunks: [],
@@ -6661,10 +6665,11 @@ ${newlined}
     $("#busy").classList.toggle("hidden", !active);
   }
   function goToStep(step) {
+    state.maxStep = Math.max(state.maxStep, step);
     $$(".panel").forEach((panel) => panel.classList.remove("active"));
     $$(".step").forEach((button, index) => {
       button.classList.toggle("active", index === step - 1);
-      if (index <= step - 1) button.disabled = false;
+      button.disabled = index + 1 > state.maxStep;
     });
     $(`#step-${step}`).classList.add("active");
     $(".workspace").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -6837,15 +6842,52 @@ ${newlined}
           }
         })
       });
-      state.document = data.document;
-      $("#document-output").textContent = data.document;
-      $("#document-model").textContent = `Generated with ${data.provider || "Groq"} \xB7 ${data.model}`;
+      state.baseDocument = data.document;
+      state.baseDocumentMeta = `Generated with ${data.provider || "Groq"} \xB7 ${data.model}`;
+      showDocument(data.document, "Original document", state.baseDocumentMeta, "original");
       goToStep(3);
       if (data.warning) toast(data.warning);
       return true;
     } catch (error) {
       toast(error.message, true);
       return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+  function showDocument(document2, label, modelLabel, variant) {
+    state.document = document2;
+    state.activeVariant = variant;
+    $("#document-output").textContent = document2;
+    $("#variant-label").textContent = label;
+    $("#document-model").textContent = modelLabel;
+    $("#restore-original").classList.toggle("hidden", variant === "original");
+    $("#document-output").scrollTop = 0;
+  }
+  async function runDocumentTool(action, targetLanguage) {
+    if (!state.baseDocument) return;
+    const labels = {
+      translate: `Translated \xB7 ${targetLanguage}`,
+      executive: "Executive version",
+      email: "Attendee email draft"
+    };
+    const busy = {
+      translate: ["Translating document\u2026", `Preserving names, numbers, tables, and meaning in ${targetLanguage}.`],
+      executive: ["Creating executive version\u2026", "Condensing the meeting into decisions, priorities, and next steps."],
+      email: ["Drafting attendee email\u2026", "Preparing a clear subject, summary, decisions, and action items."]
+    };
+    setBusy(true, ...busy[action]);
+    try {
+      const data = await request("/api/document/followup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, targetLanguage, document: state.baseDocument })
+      });
+      showDocument(data.document, labels[action], `Generated with ${data.provider || "Groq"} \xB7 ${data.model}`, action);
+      $("#translation-options").classList.add("hidden");
+      toast(`${labels[action]} is ready.`);
+    } catch (error) {
+      toast(error.message, true);
     } finally {
       setBusy(false);
     }
@@ -6858,10 +6900,15 @@ ${newlined}
     state.file = null;
     state.transcription = null;
     state.document = "";
+    state.baseDocument = "";
+    state.baseDocumentMeta = "";
+    state.activeVariant = "original";
+    state.maxStep = 1;
     state.durationPromise = null;
     fileInput.value = "";
     $("#transcript").value = "";
     $("#document-output").textContent = "";
+    $("#translation-options").classList.add("hidden");
     $("#upload-title").textContent = "Drop an audio or video recording here";
     $("#upload-detail").textContent = "Choose MP3, M4A, WAV, WebM, OGG, FLAC, MP4, MOV, or MKV";
     $("#fireflies-url").value = "";
@@ -6907,17 +6954,26 @@ ${newlined}
   $("#fireflies-import-button").addEventListener("click", importFireflies);
   generateButton.addEventListener("click", generate);
   $$(`[data-back]`).forEach((button) => button.addEventListener("click", () => goToStep(Number(button.dataset.back))));
+  $$(`.step[data-step]`).forEach((button) => button.addEventListener("click", () => {
+    const step = Number(button.dataset.step);
+    if (step <= state.maxStep) goToStep(step);
+  }));
   $("#new-recording").addEventListener("click", reset);
+  $("#restore-original").addEventListener("click", () => {
+    showDocument(state.baseDocument, "Original document", state.baseDocumentMeta, "original");
+    toast("Showing the original document.");
+  });
   $("#copy-button").addEventListener("click", async () => {
     await navigator.clipboard.writeText(state.document);
     toast("Document copied to clipboard.");
   });
   $("#download-button").addEventListener("click", () => {
     const type = $("input[name='document-type']:checked").value;
+    const variant = state.activeVariant === "original" ? type : state.activeVariant;
     const blob = new Blob([state.document], { type: "text/markdown;charset=utf-8" });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = `mccia-${type}-${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.md`;
+    link.download = `mccia-${variant}-${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.md`;
     link.click();
     URL.revokeObjectURL(link.href);
   });
@@ -6926,6 +6982,7 @@ ${newlined}
     setBusy(true, "Preparing PDF\u2026", "Formatting the document with page breaks, tables, and multilingual fonts.");
     try {
       const type = $("input[name='document-type']:checked").value;
+      const variant = state.activeVariant === "original" ? type : state.activeVariant;
       const titleLine = state.document.split(/\r?\n/).map((line) => line.replace(/^#+\s*/, "").trim()).find(Boolean);
       const response = await fetch("/api/pdf", {
         method: "POST",
@@ -6939,7 +6996,7 @@ ${newlined}
       const blob = await response.blob();
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-      link.download = `mccia-${type}-${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.pdf`;
+      link.download = `mccia-${variant}-${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.pdf`;
       link.click();
       URL.revokeObjectURL(link.href);
       toast("PDF downloaded.");
@@ -6950,13 +7007,18 @@ ${newlined}
     }
   });
   $$(`[data-followup]`).forEach((button) => button.addEventListener("click", () => {
-    const messages = {
-      translate: "Choose Hindi, Marathi, or English under Document language, then generate again from the reviewed transcript.",
-      executive: "Executive-version generation is queued for the next build slice.",
-      email: "Attendee-email drafting is queued for the next build slice."
-    };
-    toast(messages[button.dataset.followup]);
+    const action = button.dataset.followup;
+    if (action === "translate") {
+      const options = $("#translation-options");
+      options.classList.toggle("hidden");
+      if (!options.classList.contains("hidden")) $("#translation-language").focus();
+      return;
+    }
+    runDocumentTool(action);
   }));
+  $("#translate-confirm").addEventListener("click", () => {
+    runDocumentTool("translate", $("#translation-language").value);
+  });
   checkHealth();
   window.addEventListener("beforeunload", releaseMicrophone);
 })();

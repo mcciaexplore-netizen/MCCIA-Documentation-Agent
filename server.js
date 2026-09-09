@@ -12,7 +12,7 @@ import ffmpegPath from "ffmpeg-static";
 import { combineGroqTranscriptions, extractGeminiText, firefliesTranscriptId, normalizeFirefliesTranscript, normalizeGeminiTranscription, normalizeLongAudioTranscript, normalizeTranscription, safeDownloadName, splitTranscriptForModel } from "./lib/core.js";
 import { createQuotaFallbackDocument } from "./lib/fallback-document.js";
 import { createDocumentPdf } from "./lib/pdf.js";
-import { AGENT_NAME, buildDocumentRequest, SYSTEM_PROMPT } from "./lib/prompts.js";
+import { AGENT_NAME, buildDocumentRequest, buildFollowupRequest, FOLLOWUP_SYSTEM_PROMPT, SYSTEM_PROMPT } from "./lib/prompts.js";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, "public");
@@ -23,6 +23,7 @@ const PORT = Number(process.env.PORT) || 3000;
 const MAX_UPLOAD_BYTES = (Number(process.env.MAX_AUDIO_UPLOAD_MB) || 200) * 1024 * 1024;
 const GROQ_TRANSCRIPTION_MODEL = process.env.GROQ_TRANSCRIPTION_MODEL || "whisper-large-v3-turbo";
 const GROQ_DOCUMENT_MODEL = process.env.GROQ_DOCUMENT_MODEL || "groq/compound-mini";
+const GROQ_FOLLOWUP_FALLBACK_MODEL = process.env.GROQ_FOLLOWUP_FALLBACK_MODEL || "openai/gpt-oss-20b";
 const GROQ_API_BASE = "https://api.groq.com/openai/v1";
 const FIREFLIES_API_URL = "https://api.fireflies.ai/graphql";
 const GROQ_MAX_CHUNK_BYTES = 24 * 1024 * 1024;
@@ -181,20 +182,41 @@ function groqCompletionText(payload) {
   return String(payload?.choices?.[0]?.message?.content || "").trim();
 }
 
-async function groqChatCompletion(messages, maxCompletionTokens = 8_192) {
+async function groqChatCompletion(messages, maxCompletionTokens = 8_192, model = GROQ_DOCUMENT_MODEL, attempts = 4) {
+  const compoundOptions = model.startsWith("groq/compound") ? {
+    tool_choice: "none",
+    citation_options: "disabled",
+    compound_custom: { tools: { enabled_tools: [] } },
+  } : {};
   return withGroqRetry(() => groqRequest(`${GROQ_API_BASE}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: GROQ_DOCUMENT_MODEL,
+      model,
       messages,
       temperature: 0.1,
       max_completion_tokens: maxCompletionTokens,
-      tool_choice: "none",
-      citation_options: "disabled",
-      compound_custom: { tools: { enabled_tools: [] } },
+      ...compoundOptions,
     }),
-  }));
+  }), attempts);
+}
+
+async function groqFollowupCompletion(messages, { preferLongOutput = false } = {}) {
+  const models = preferLongOutput
+    ? [GROQ_FOLLOWUP_FALLBACK_MODEL, GROQ_DOCUMENT_MODEL]
+    : [GROQ_DOCUMENT_MODEL, GROQ_FOLLOWUP_FALLBACK_MODEL];
+  let lastError;
+  for (const model of [...new Set(models)]) {
+    try {
+      const maxCompletionTokens = preferLongOutput && model === GROQ_FOLLOWUP_FALLBACK_MODEL ? 60_000 : 8_192;
+      return { payload: await groqChatCompletion(messages, maxCompletionTokens, model, 2), model };
+    } catch (error) {
+      lastError = error;
+      if (![404, 429, 503].includes(Number(error?.status))) throw error;
+      console.warn(`Groq follow-up model ${model} is unavailable; trying the next configured model.`);
+    }
+  }
+  throw lastError;
 }
 
 const TRANSCRIPT_EVIDENCE_PROMPT = `You extract evidence from one chunk of an MCCIA meeting transcript.
@@ -1019,6 +1041,43 @@ async function generateDocument(request, response) {
   });
 }
 
+async function generateDocumentFollowup(request, response) {
+  const input = parseJsonBody(await readBody(request, 1024 * 1024));
+  const document = String(input.document || "").trim();
+  const action = String(input.action || "");
+  if (!document) {
+    const error = new Error("A generated document is required for this action.");
+    error.status = 400;
+    throw error;
+  }
+  if (!["translate", "executive", "email"].includes(action)) {
+    const error = new Error("Choose translation, executive version, or attendee email.");
+    error.status = 400;
+    throw error;
+  }
+
+  try {
+    const result = await groqFollowupCompletion([
+      { role: "system", content: FOLLOWUP_SYSTEM_PROMPT },
+      { role: "user", content: buildFollowupRequest(input) },
+    ], { preferLongOutput: action === "translate" });
+    const transformed = groqCompletionText(result.payload);
+    if (!transformed) throw new Error("Groq returned no transformed document text.");
+    sendJson(response, 200, {
+      document: transformed,
+      action,
+      targetLanguage: action === "translate" ? input.targetLanguage : undefined,
+      model: result.model,
+      provider: "Groq",
+    });
+  } catch (error) {
+    if (Number(error?.status) === 429) {
+      error.message = "Groq's free allowance is currently exhausted across both document models. Your original document is safe; please try this tool again after the limit resets.";
+    }
+    throw error;
+  }
+}
+
 async function downloadPdf(request, response) {
   const input = parseJsonBody(await readBody(request, 1024 * 1024));
   const documentText = String(input?.document || "").trim();
@@ -1070,7 +1129,7 @@ const server = http.createServer(async (request, response) => {
         provider: "Groq",
         maxUploadMb: Math.round(MAX_UPLOAD_BYTES / 1024 / 1024),
         chunkMinutes: GROQ_CHUNK_SECONDS / 60,
-        models: { transcription: GROQ_TRANSCRIPTION_MODEL, document: GROQ_DOCUMENT_MODEL },
+        models: { transcription: GROQ_TRANSCRIPTION_MODEL, document: GROQ_DOCUMENT_MODEL, followupFallback: GROQ_FOLLOWUP_FALLBACK_MODEL },
         release: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || "local",
       });
       return;
@@ -1093,6 +1152,10 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === "POST" && url.pathname === "/api/generate") {
       await generateDocument(request, response);
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/document/followup") {
+      await generateDocumentFollowup(request, response);
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/pdf") {

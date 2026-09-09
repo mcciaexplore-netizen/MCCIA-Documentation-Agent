@@ -16,6 +16,10 @@ The MCCIA Documentation Agent is a Groq-powered multilingual documentation tool 
 - Groq Compound Mini generation for minutes, reports, summaries, and templates
 - Fireflies meeting-link import with existing speaker names and sentence timestamps
 - Direct PDF download with multilingual Hindi, Marathi, and English fonts
+- One-click full-document translation into Hindi, Marathi, or English
+- One-page executive versions that preserve decisions, owners, deadlines, and open questions
+- Ready-to-send attendee email drafts grounded in the generated document
+- Reversible document variants: return to the original after creating any follow-up version
 - Server-side Groq API key; large audio uploads go directly to private Vercel Blob storage
 - Private recordings are converted and sent to Groq as valid audio chunks
 - Temporary private Blob uploads are deleted immediately after transcription
@@ -48,6 +52,7 @@ Node.js 20 or newer is required. Production also needs a private Vercel Blob sto
 | `BLOB_READ_WRITE_TOKEN` | optional legacy/local auth | Private client uploads outside Vercel's OIDC environment |
 | `GROQ_TRANSCRIPTION_MODEL` | `whisper-large-v3-turbo` | Multilingual transcription model |
 | `GROQ_DOCUMENT_MODEL` | `groq/compound-mini` | Minutes and report generation model |
+| `GROQ_FOLLOWUP_FALLBACK_MODEL` | `openai/gpt-oss-20b` | Fallback for translation, executive versions, and attendee-email drafts |
 | `GROQ_CHUNK_MINUTES` | `15` | Length of each compressed transcription chunk (5–20 minutes) |
 | `GROQ_CHUNK_CONCURRENCY` | `2` | Parallel Groq transcription requests (1–4) |
 | `PORT` | `3000` | Local server port |
