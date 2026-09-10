@@ -6895,6 +6895,60 @@ ${newlined}
   function escapeHtml(value) {
     return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
   }
+  function transcriptExportText() {
+    return $("#transcript").value.trim();
+  }
+  function transcriptDownloadName(extension) {
+    const sourceName = state.file?.name || state.transcription?.filename || "meeting";
+    const stem = sourceName.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "meeting";
+    return `mccia-${stem}-transcript.${extension}`;
+  }
+  function downloadBlob(blob, filename) {
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 0);
+  }
+  function downloadTranscriptDoc() {
+    const transcript = transcriptExportText();
+    if (!transcript) {
+      toast("The transcript cannot be empty.", true);
+      return;
+    }
+    const html = `<!doctype html>
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" lang="en">
+<head><meta charset="utf-8"><title>MCCIA Meeting Transcript</title>
+<style>body{font-family:"Nirmala UI","Arial Unicode MS",Arial,sans-serif;margin:48pt;color:#12202a}h1{font-size:22pt;margin:0 0 8pt}p.meta{color:#68777e;font-size:9pt;margin:0 0 24pt}pre{font-family:"Nirmala UI","Arial Unicode MS",Arial,sans-serif;font-size:10.5pt;line-height:1.6;white-space:pre-wrap;word-wrap:break-word}</style></head>
+<body><h1>MCCIA Meeting Transcript</h1><p class="meta">Timestamped transcript exported without summarisation or rewriting.</p><pre>${escapeHtml(transcript)}</pre></body></html>`;
+    downloadBlob(new Blob(["\uFEFF", html], { type: "application/msword;charset=utf-8" }), transcriptDownloadName("doc"));
+    toast("Transcript downloaded as a Word file.");
+  }
+  async function downloadTranscriptPdf() {
+    const transcript = transcriptExportText();
+    if (!transcript) {
+      toast("The transcript cannot be empty.", true);
+      return;
+    }
+    setBusy(true, "Preparing transcript PDF\u2026", "Keeping every timestamp and spoken line exactly as shown.");
+    try {
+      const response = await fetch("/api/pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ document: transcript, title: "MCCIA Meeting Transcript" })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `Transcript PDF download failed (${response.status})`);
+      }
+      downloadBlob(await response.blob(), transcriptDownloadName("pdf"));
+      toast("Transcript downloaded as a PDF.");
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
   function reset() {
     discardRecording({ preserveFile: true });
     state.file = null;
@@ -6953,6 +7007,8 @@ ${newlined}
   transcribeButton.addEventListener("click", transcribe);
   $("#fireflies-import-button").addEventListener("click", importFireflies);
   generateButton.addEventListener("click", generate);
+  $("#download-transcript-doc").addEventListener("click", downloadTranscriptDoc);
+  $("#download-transcript-pdf").addEventListener("click", downloadTranscriptPdf);
   $$(`[data-back]`).forEach((button) => button.addEventListener("click", () => goToStep(Number(button.dataset.back))));
   $$(`.step[data-step]`).forEach((button) => button.addEventListener("click", () => {
     const step = Number(button.dataset.step);

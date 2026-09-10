@@ -214,6 +214,13 @@ main { width: min(1320px, calc(100% - 48px)); margin: 0 auto 92px; }
 .meta-item strong { font-size: 13px; font-variant-numeric: tabular-nums; }
 .transcript-field textarea { min-height: 430px; padding: 22px; background: #f9faf7; font: 13px/1.8 var(--mono); resize: vertical; }
 .speaker-map { margin-top: 15px; color: var(--muted); font-size: 12px; }
+.transcript-export { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 28px; margin-top: 24px; padding: 22px 24px; border: 1px solid var(--line); border-left: 3px solid var(--green); border-radius: 9px; background: var(--green-pale); }
+.transcript-export .kicker { margin-bottom: 5px; color: var(--green-dark); }
+.transcript-export h3 { margin: 0; font-family: var(--display); font-size: 23px; font-weight: 400; letter-spacing: -0.02em; }
+.transcript-export p { max-width: 640px; margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.transcript-export-actions { display: flex; align-items: center; gap: 9px; }
+.transcript-export-actions button { white-space: nowrap; }
+.transcript-export-actions .secondary span { margin-left: 6px; color: var(--muted); font-family: var(--mono); font-size: 10px; }
 
 .document-toolbar { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid var(--line); border-radius: 10px 10px 0 0; padding: 10px 12px 10px 18px; background: #f3f6f4; }
 .document-toolbar > div { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
@@ -283,6 +290,8 @@ main { width: min(1320px, calc(100% - 48px)); margin: 0 auto 92px; }
   .meta-item:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
   .tools-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
   .tool-grid { grid-template-columns: 1fr; }
+  .transcript-export { grid-template-columns: 1fr; gap: 18px; }
+  .transcript-export-actions { justify-content: flex-start; }
 }
 
 @media (max-width: 560px) {
@@ -327,6 +336,9 @@ main { width: min(1320px, calc(100% - 48px)); margin: 0 auto 92px; }
   .document-output { padding: 32px 20px; }
   .document-tools { padding: 23px 16px; }
   .translation-options { grid-template-columns: 1fr; }
+  .transcript-export { padding: 19px 16px; }
+  .transcript-export-actions { align-items: stretch; flex-direction: column; }
+  .transcript-export-actions button { width: 100%; }
   .site-footer { align-items: flex-start; flex-direction: column; gap: 6px; width: min(100% - 24px, 1320px); }
   .site-footer p { text-align: left; }
   .busy-overlay { inset: 64px 0 0; padding: 20px; text-align: center; }

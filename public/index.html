@@ -113,6 +113,17 @@
           <div class="metadata" id="metadata"></div>
           <label class="field transcript-field"><span>Timestamped transcript</span><textarea id="transcript" spellcheck="false"></textarea></label>
           <div class="speaker-map" id="speaker-map"></div>
+          <section class="transcript-export" aria-labelledby="transcript-export-title">
+            <div>
+              <span class="kicker">TRANSCRIPT FILE</span>
+              <h3 id="transcript-export-title">Download the script as-is</h3>
+              <p>Exports this timestamped transcript exactly as shown—no minutes, report, summary, or AI rewriting.</p>
+            </div>
+            <div class="transcript-export-actions">
+              <button class="secondary" id="download-transcript-doc" type="button">Download Word <span>.doc</span></button>
+              <button class="primary" id="download-transcript-pdf" type="button">Download PDF <span>↓</span></button>
+            </div>
+          </section>
           <div class="actions right"><button class="secondary" data-back="1">← Back</button><button class="primary" id="generate-button">Generate document <span>→</span></button></div>
         </div>
 
