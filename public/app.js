@@ -302,9 +302,11 @@ function renderMetadata(data) {
     ["Audio quality", data.audioQuality || "Not assessed"],
   ];
   $("#metadata").innerHTML = items.map(([label, value]) => `<div class="meta-item"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
-  $("#speaker-map").textContent = data.speakers?.length
-    ? `Detected labels: ${data.speakers.join(", ")}. Edit them directly in the transcript if you know the names.`
-    : "Speaker labels were not available for this recording.";
+  $("#speaker-map").textContent = data.diarizationAvailable === false
+    ? "Groq Whisper does not separate speakers yet. All speech is temporarily labelled Speaker 1; edit names where known."
+    : data.speakers?.length
+      ? `Detected labels: ${data.speakers.join(", ")}. Edit them directly in the transcript if you know the names.`
+      : "Speaker labels were not available for this recording.";
 }
 
 async function transcribe() {
@@ -325,8 +327,8 @@ async function transcribe() {
       true,
       longRecording ? "Transcribing long recording…" : "Listening carefully…",
       longRecording
-        ? "Transcribing and separating speakers with the local WhisperX service — long recordings take a while."
-        : "Preserving Hindi, Marathi, English, and mixed-language speech with local WhisperX transcription.",
+        ? "Preparing secure 15-minute chunks, then transcribing them with Groq Whisper."
+        : "Preserving Hindi, Marathi, English, and mixed-language speech with Groq Whisper.",
     );
     const data = await request("/api/transcribe", {
       method: "POST",
@@ -542,12 +544,12 @@ async function checkHealth() {
     element.classList.toggle("ready", fullyConfigured);
     element.classList.toggle("error", !fullyConfigured);
     element.querySelector("span:last-child").textContent = !data.transcriptionConfigured
-      ? "WhisperX service not running"
+      ? "Groq key needed"
       : !data.documentConfigured
         ? "Claude key needed"
         : !data.blobConfigured
           ? "Storage setup needed"
-          : "WhisperX + Claude + storage ready";
+          : "Groq + Claude + storage ready";
   } catch {
     $("#api-status").classList.add("error");
     $("#api-status span:last-child").textContent = "Server unavailable";

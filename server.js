@@ -1,13 +1,15 @@
 import http from "node:http";
-import { createWriteStream, openAsBlob } from "node:fs";
+import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { del, get, issueSignedToken } from "@vercel/blob";
 import { handleUpload, handleUploadPresigned } from "@vercel/blob/client";
-import { firefliesTranscriptId, normalizeFirefliesTranscript, normalizeWhisperXTranscript, safeDownloadName, splitTranscriptForModel } from "./lib/core.js";
+import ffmpegPath from "ffmpeg-static";
+import { combineGroqTranscriptions, firefliesTranscriptId, normalizeFirefliesTranscript, safeDownloadName, splitTranscriptForModel } from "./lib/core.js";
 import { createQuotaFallbackDocument } from "./lib/fallback-document.js";
 import { createDocumentPdf } from "./lib/pdf.js";
 import { AGENT_NAME, buildDocumentRequest, buildFollowupRequest, FOLLOWUP_SYSTEM_PROMPT, SYSTEM_PROMPT } from "./lib/prompts.js";
@@ -34,13 +36,16 @@ await loadLocalEnv(path.join(ROOT, ".env"));
 
 const PORT = Number(process.env.PORT) || 3000;
 const MAX_UPLOAD_BYTES = (Number(process.env.MAX_AUDIO_UPLOAD_MB) || 200) * 1024 * 1024;
-const WHISPERX_SERVICE_URL = process.env.WHISPERX_SERVICE_URL || "http://127.0.0.1:8001";
-const WHISPERX_MODEL = process.env.WHISPERX_MODEL || "large-v3";
+const GROQ_TRANSCRIPTION_MODEL = process.env.GROQ_TRANSCRIPTION_MODEL || "whisper-large-v3-turbo";
 const CLAUDE_DOCUMENT_MODEL = process.env.CLAUDE_DOCUMENT_MODEL || "claude-sonnet-5-5";
 const CLAUDE_FOLLOWUP_MODEL = process.env.CLAUDE_FOLLOWUP_MODEL || CLAUDE_DOCUMENT_MODEL;
 const ANTHROPIC_API_BASE = "https://api.anthropic.com/v1";
 const ANTHROPIC_VERSION = "2023-06-01";
+const GROQ_API_BASE = "https://api.groq.com/openai/v1";
 const FIREFLIES_API_URL = "https://api.fireflies.ai/graphql";
+const GROQ_MAX_CHUNK_BYTES = 24 * 1024 * 1024;
+const GROQ_CHUNK_SECONDS = Math.max(5 * 60, Math.min(20 * 60, Number(process.env.GROQ_CHUNK_MINUTES || 15) * 60));
+const GROQ_CHUNK_CONCURRENCY = Math.max(1, Math.min(4, Number(process.env.GROQ_CHUNK_CONCURRENCY) || 2));
 const DOCUMENT_DIRECT_BYTES = 24_000;
 const DOCUMENT_CHUNK_CHARACTERS = 18_000;
 const mimeTypes = {
@@ -87,6 +92,15 @@ async function readBody(request, limit = 1024 * 1024) {
   return Buffer.concat(chunks);
 }
 
+function requireGroqKey() {
+  if (!process.env.GROQ_API_KEY) {
+    const error = new Error("Groq is not configured yet. Add GROQ_API_KEY to the Vercel environment, then redeploy.");
+    error.status = 503;
+    throw error;
+  }
+  return process.env.GROQ_API_KEY;
+}
+
 function requireClaudeKey() {
   if (!process.env.ANTHROPIC_API_KEY) {
     const error = new Error("Claude is not configured yet. Add ANTHROPIC_API_KEY to the Vercel environment, then redeploy.");
@@ -112,38 +126,38 @@ function retryAfterMs(response) {
   return Number.isFinite(seconds) ? seconds * 1000 : Math.max(0, Date.parse(header) - Date.now());
 }
 
-async function whisperXRequest(url, options = {}) {
-  let response;
-  try {
-    response = await fetch(url, options);
-  } catch {
-    const error = new Error("The local WhisperX transcription service is not reachable. Start it (see transcribe-service/README.md) and confirm WHISPERX_SERVICE_URL, then try again.");
-    error.status = 503;
-    throw error;
-  }
+async function groqRequest(url, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${requireGroqKey()}`,
+      ...options.headers,
+    },
+  });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error(payload?.error || `WhisperX service request failed (${response.status}).`);
+    const error = new Error(payload?.error?.message || `Groq request failed (${response.status}).`);
     error.status = response.status;
+    error.retryAfterMs = retryAfterMs(response);
     throw error;
   }
   return payload;
 }
 
-function isRetryableWhisperXError(error) {
+function isRetryableGroqError(error) {
   return [408, 429, 500, 502, 503, 504].includes(Number(error?.status));
 }
 
-async function withWhisperXRetry(operation, attempts = 3) {
+async function withGroqRetry(operation, attempts = 4) {
   let lastError;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       return await operation();
     } catch (error) {
       lastError = error;
-      if (!isRetryableWhisperXError(error) || attempt === attempts - 1) throw error;
-      const delay = retryDelayMs(attempt, 0);
-      console.warn(`WhisperX service is temporarily unavailable (${error.status}); retrying in ${delay} ms.`);
+      if (!isRetryableGroqError(error) || attempt === attempts - 1) throw error;
+      const delay = retryDelayMs(attempt, error.retryAfterMs);
+      console.warn(`Groq is temporarily unavailable (${error.status}); retrying in ${delay} ms.`);
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
@@ -485,7 +499,24 @@ async function getPrivateRecording(blobUrl) {
   throw error;
 }
 
-async function prepareRecording(blobUrl, filename) {
+function runFfmpeg(args) {
+  if (!ffmpegPath) throw new Error("The audio converter is not available in this deployment.");
+  return new Promise((resolve, reject) => {
+    const process = spawn(ffmpegPath, args, { windowsHide: true });
+    let stderr = "";
+    process.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+      if (stderr.length > 8000) stderr = stderr.slice(-8000);
+    });
+    process.once("error", reject);
+    process.once("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Audio preparation failed${stderr.trim() ? `: ${stderr.trim()}` : "."}`));
+    });
+  });
+}
+
+async function prepareGroqChunks(blobUrl, filename) {
   const recording = await getPrivateRecording(blobUrl);
   normalizeUploadInput({
     filename,
@@ -493,12 +524,32 @@ async function prepareRecording(blobUrl, filename) {
     size: recording.blob.size,
   });
 
-  const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "mccia-whisperx-"));
+  const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "mccia-groq-"));
   try {
     const inputExtension = path.extname(filename).toLowerCase().replace(/[^.a-z0-9]/g, "") || ".audio";
-    const filePath = path.join(tempDirectory, `source${inputExtension}`);
-    await pipeline(recording.stream, createWriteStream(filePath));
-    return { tempDirectory, filePath };
+    const inputPath = path.join(tempDirectory, `source${inputExtension}`);
+    await pipeline(recording.stream, createWriteStream(inputPath));
+
+    const outputPattern = path.join(tempDirectory, "chunk-%03d.mp3");
+    await runFfmpeg([
+      "-hide_banner", "-loglevel", "error", "-i", inputPath,
+      "-vn", "-map_metadata", "-1", "-ac", "1", "-ar", "16000", "-b:a", "32k",
+      "-f", "segment", "-segment_time", String(GROQ_CHUNK_SECONDS), "-reset_timestamps", "1",
+      outputPattern,
+    ]);
+
+    const chunkPaths = (await fs.readdir(tempDirectory))
+      .filter((name) => /^chunk-\d{3}\.mp3$/.test(name))
+      .sort()
+      .map((name) => path.join(tempDirectory, name));
+    if (!chunkPaths.length) throw new Error("The recording could not be divided into transcription chunks.");
+    for (const chunkPath of chunkPaths) {
+      const details = await fs.stat(chunkPath);
+      if (!details.size || details.size > GROQ_MAX_CHUNK_BYTES) {
+        throw new Error("An audio chunk exceeds Groq's 25 MB free-plan limit. Reduce GROQ_CHUNK_MINUTES and try again.");
+      }
+    }
+    return { tempDirectory, chunkPaths };
   } catch (error) {
     await removeAudioTempDirectory(tempDirectory).catch(() => {});
     throw error;
@@ -509,18 +560,23 @@ async function removeAudioTempDirectory(tempDirectory) {
   if (!tempDirectory) return;
   const safeRoot = path.resolve(os.tmpdir());
   const safeTarget = path.resolve(tempDirectory);
-  if (safeTarget === safeRoot || !safeTarget.startsWith(`${safeRoot}${path.sep}`) || !path.basename(safeTarget).startsWith("mccia-whisperx-")) {
+  if (safeTarget === safeRoot || !safeTarget.startsWith(`${safeRoot}${path.sep}`) || !path.basename(safeTarget).startsWith("mccia-groq-")) {
     console.warn("Refused to remove an unexpected audio temporary directory.");
     return;
   }
   await fs.rm(safeTarget, { recursive: true, force: true });
 }
 
-async function transcribeWithWhisperXService(filePath, filename) {
-  const audioBlob = await openAsBlob(filePath);
+async function transcribeGroqChunk(chunkPath) {
+  const audio = await fs.readFile(chunkPath);
   const form = new FormData();
-  form.append("audio", audioBlob, filename);
-  return withWhisperXRetry(() => whisperXRequest(`${WHISPERX_SERVICE_URL}/transcribe`, {
+  form.append("file", new Blob([audio], { type: "audio/mpeg" }), path.basename(chunkPath));
+  form.append("model", GROQ_TRANSCRIPTION_MODEL);
+  form.append("response_format", "verbose_json");
+  form.append("timestamp_granularities[]", "segment");
+  form.append("temperature", "0");
+  form.append("prompt", "This is an MCCIA meeting. Preserve Hindi and Marathi in Devanagari and English words in English. Transcribe faithfully; do not translate or summarize.");
+  return withGroqRetry(() => groqRequest(`${GROQ_API_BASE}/audio/transcriptions`, {
     method: "POST",
     body: form,
   }));
@@ -540,7 +596,8 @@ async function mapWithConcurrency(items, concurrency, operation) {
   return results;
 }
 
-async function transcribeWithWhisperX(request, response) {
+async function transcribeWithGroq(request, response) {
+  requireGroqKey();
   const input = parseJsonBody(await readBody(request, 32 * 1024));
   const blobUrl = validatePrivateBlobUrl(input?.blobUrl);
   const filename = path.basename(String(input?.filename || "recording.webm")).slice(0, 200);
@@ -548,23 +605,33 @@ async function transcribeWithWhisperX(request, response) {
   let prepared;
 
   try {
-    prepared = await prepareRecording(blobUrl, filename);
-    const payload = await transcribeWithWhisperXService(prepared.filePath, filename);
-    const normalized = normalizeWhisperXTranscript(payload, durationSeconds);
-    if (!normalized.text) throw new Error("WhisperX returned an empty transcript.");
+    prepared = await prepareGroqChunks(blobUrl, filename);
+    const chunkResults = await mapWithConcurrency(
+      prepared.chunkPaths,
+      GROQ_CHUNK_CONCURRENCY,
+      (chunkPath) => transcribeGroqChunk(chunkPath),
+    );
+    const normalized = combineGroqTranscriptions(chunkResults, GROQ_CHUNK_SECONDS, durationSeconds);
+    if (!normalized.text) throw new Error("Groq Whisper returned an empty transcript.");
 
     sendJson(response, 200, {
       ...normalized,
       filename,
       dominantLanguages: normalized.detectedLanguages.length
         ? normalized.detectedLanguages.join(", ")
-        : "Auto-detected by WhisperX",
+        : "Auto-detected by Groq Whisper",
       audioQuality: normalized.segments.length ? "Processable" : "Limited transcript detail",
-      model: WHISPERX_MODEL,
-      provider: "WhisperX (local)",
-      transcriptionMode: "whisperx-diarized",
-      diarizationAvailable: true,
+      model: GROQ_TRANSCRIPTION_MODEL,
+      provider: "Groq Whisper",
+      transcriptionMode: "chunked-segment-timestamps",
+      chunkCount: prepared.chunkPaths.length,
+      diarizationAvailable: false,
     });
+  } catch (error) {
+    if (Number(error?.status) === 429) {
+      error.message = "Groq's free transcription allowance is temporarily exhausted. Please wait for the limit to reset and try again.";
+    }
+    throw error;
   } finally {
     await removeAudioTempDirectory(prepared?.tempDirectory).catch((error) => console.warn(`Could not remove temporary audio: ${error.message}`));
     await deletePrivateBlob(blobUrl);
@@ -801,26 +868,12 @@ async function serveStatic(request, response, pathname) {
   }
 }
 
-async function checkWhisperXHealth() {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 700);
-    const response = await fetch(`${WHISPERX_SERVICE_URL}/health`, { signal: controller.signal });
-    clearTimeout(timeout);
-    if (!response.ok) return false;
-    const payload = await response.json().catch(() => ({}));
-    return Boolean(payload?.ok);
-  } catch {
-    return false;
-  }
-}
-
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
 
   try {
     if (request.method === "GET" && url.pathname === "/api/health") {
-      const transcriptionConfigured = await checkWhisperXHealth();
+      const transcriptionConfigured = Boolean(process.env.GROQ_API_KEY);
       const documentConfigured = Boolean(process.env.ANTHROPIC_API_KEY);
       sendJson(response, 200, {
         ok: true,
@@ -832,9 +885,10 @@ const server = http.createServer(async (request, response) => {
         firefliesConfigured: Boolean(process.env.FIREFLIES_API_KEY),
         accountsConfigured: isAccountsConfigured(),
         agent: AGENT_NAME,
-        provider: "WhisperX (local) + Anthropic Claude",
+        provider: "Groq Whisper + Anthropic Claude",
         maxUploadMb: Math.round(MAX_UPLOAD_BYTES / 1024 / 1024),
-        models: { transcription: WHISPERX_MODEL, document: CLAUDE_DOCUMENT_MODEL, followup: CLAUDE_FOLLOWUP_MODEL },
+        chunkMinutes: GROQ_CHUNK_SECONDS / 60,
+        models: { transcription: GROQ_TRANSCRIPTION_MODEL, document: CLAUDE_DOCUMENT_MODEL, followup: CLAUDE_FOLLOWUP_MODEL },
         release: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || "local",
       });
       return;
@@ -844,7 +898,7 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/transcribe") {
-      await transcribeWithWhisperX(request, response);
+      await transcribeWithGroq(request, response);
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/import/fireflies") {
@@ -909,7 +963,7 @@ const server = http.createServer(async (request, response) => {
 server.listen(PORT, () => {
   console.log(`${AGENT_NAME} is ready at http://localhost:${PORT}`);
   if (!process.env.ANTHROPIC_API_KEY) console.log("Add ANTHROPIC_API_KEY to .env to enable document generation.");
-  console.log(`Transcription expects the local WhisperX service at ${WHISPERX_SERVICE_URL} (see transcribe-service/README.md).`);
+  if (!process.env.GROQ_API_KEY) console.log("Add GROQ_API_KEY to .env to enable transcription.");
   if (!isAccountsConfigured()) console.log("Add DATABASE_URL to .env to enable accounts, login, and saved history.");
 });
 
