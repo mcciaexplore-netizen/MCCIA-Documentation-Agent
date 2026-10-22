@@ -6,7 +6,11 @@
     <meta name="description" content="The MCCIA Documentation Agent turns Hindi, English, Marathi, and mixed-language recordings into trustworthy Chamber documents." />
     <title>MCCIA — Meeting documentation</title>
     <link rel="icon" type="image/png" href="/mccia-logo.png" />
-    <link rel="stylesheet" href="/styles.css?v=4" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Outfit:wght@400;500;600;700&display=swap" />
+    <link rel="stylesheet" href="/theme.css?v=1" />
+    <link rel="stylesheet" href="/styles.css?v=6" />
   </head>
   <body>
     <a class="skip-link" href="#workflow">Skip to document workflow</a>
@@ -16,7 +20,21 @@
         <span class="mccia-logo" aria-hidden="true"><img src="/mccia-logo.png" alt="" /></span>
         <span class="brand-label"><strong>Documentation Agent</strong><small>Mahratta Chamber of Commerce, Industries and Agriculture</small></span>
       </a>
-      <div class="topbar-meta"><span class="workspace-label">Private workspace</span><div class="status" id="api-status"><span class="status-dot"></span><span>Checking setup…</span></div></div>
+      <div class="topbar-meta">
+        <span class="workspace-label">Private workspace</span>
+        <div class="status" id="api-status"><span class="status-dot"></span><span>Checking setup…</span></div>
+        <div class="auth-area" id="auth-area">
+          <div class="auth-guest" id="auth-guest">
+            <button class="text-button" id="open-login" type="button">Sign in</button>
+            <button class="secondary small" id="open-signup" type="button">Create account</button>
+          </div>
+          <div class="auth-user hidden" id="auth-user">
+            <button class="text-button" id="open-history" type="button">History</button>
+            <span class="auth-name" id="auth-name"></span>
+            <button class="text-button" id="logout-button" type="button">Sign out</button>
+          </div>
+        </div>
+      </div>
     </header>
 
     <main>
@@ -48,7 +66,7 @@
         <div class="panel active" id="step-1">
           <div class="panel-heading">
             <div><span class="kicker">STEP 01</span><h2>What should I create?</h2></div>
-            <p>Choose the MCCIA output, then add your recording. Groq Whisper handles long multilingual audio in secure chunks.</p>
+            <p>Choose the MCCIA output, then add your recording. A local WhisperX service transcribes long multilingual audio and separates speakers.</p>
           </div>
 
           <div class="section-label"><span>01</span><strong>Choose the output</strong><small>Select the document you need after the meeting.</small></div>
@@ -158,7 +176,42 @@
 
     <footer class="site-footer"><span>MCCIA Documentation Agent</span><p>Recordings and transcripts are processed only to create the requested document.</p></footer>
 
+    <div class="modal-overlay hidden" id="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
+      <div class="modal">
+        <button class="modal-close" id="auth-modal-close" type="button" aria-label="Close">×</button>
+        <div class="auth-tabs" role="tablist">
+          <button class="auth-tab active" id="auth-tab-login" type="button" role="tab">Sign in</button>
+          <button class="auth-tab" id="auth-tab-signup" type="button" role="tab">Create account</button>
+        </div>
+        <h2 class="modal-title" id="auth-modal-title">Sign in</h2>
+        <form class="auth-form" id="login-form">
+          <label class="field"><span>Email</span><input id="login-email" type="email" autocomplete="username" required /></label>
+          <label class="field"><span>Password</span><input id="login-password" type="password" autocomplete="current-password" required /></label>
+          <p class="auth-error" id="login-error"></p>
+          <button class="primary" type="submit">Sign in <span>→</span></button>
+        </form>
+        <form class="auth-form hidden" id="signup-form">
+          <label class="field"><span>Name</span><input id="signup-name" type="text" autocomplete="name" required /></label>
+          <label class="field"><span>Email</span><input id="signup-email" type="email" autocomplete="username" required /></label>
+          <label class="field"><span>Password</span><input id="signup-password" type="password" autocomplete="new-password" minlength="8" required /></label>
+          <small>At least 8 characters.</small>
+          <p class="auth-error" id="signup-error"></p>
+          <button class="primary" type="submit">Create account <span>→</span></button>
+        </form>
+      </div>
+    </div>
+
+    <div class="modal-overlay hidden" id="history-modal" role="dialog" aria-modal="true" aria-labelledby="history-modal-title">
+      <div class="modal modal-wide">
+        <button class="modal-close" id="history-modal-close" type="button" aria-label="Close">×</button>
+        <h2 class="modal-title" id="history-modal-title">Saved documents</h2>
+        <p class="modal-subtitle">Documents you generate while signed in are saved here automatically.</p>
+        <div class="history-list" id="history-list"></div>
+        <p class="history-empty hidden" id="history-empty">No saved documents yet. Generate one while signed in and it will appear here.</p>
+      </div>
+    </div>
+
     <div class="toast" id="toast" role="alert"></div>
-    <script src="/app.bundle.js?v=20" defer></script>
+    <script src="/app.bundle.js?v=23" defer></script>
   </body>
 </html>

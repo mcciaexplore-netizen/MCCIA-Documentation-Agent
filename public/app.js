@@ -18,6 +18,9 @@ const state = {
   blobConfigured: false,
   blobUploadMode: "",
   firefliesConfigured: false,
+  accountsConfigured: false,
+  user: null,
+  lastTranscript: "",
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -299,11 +302,9 @@ function renderMetadata(data) {
     ["Audio quality", data.audioQuality || "Not assessed"],
   ];
   $("#metadata").innerHTML = items.map(([label, value]) => `<div class="meta-item"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
-  $("#speaker-map").textContent = data.diarizationAvailable === false
-    ? "Groq Whisper does not separate speakers yet. All speech is temporarily labelled Speaker 1; edit names where known. WhisperX diarization is planned for a later update."
-    : data.speakers?.length
-      ? `Detected labels: ${data.speakers.join(", ")}. Edit them directly in the transcript if you know the names.`
-      : "Speaker labels were not available for this recording.";
+  $("#speaker-map").textContent = data.speakers?.length
+    ? `Detected labels: ${data.speakers.join(", ")}. Edit them directly in the transcript if you know the names.`
+    : "Speaker labels were not available for this recording.";
 }
 
 async function transcribe() {
@@ -324,8 +325,8 @@ async function transcribe() {
       true,
       longRecording ? "Transcribing long recording…" : "Listening carefully…",
       longRecording
-        ? "Preparing secure 15-minute chunks, then transcribing them with Groq Whisper."
-        : "Preserving Hindi, Marathi, English, and mixed-language speech with Groq Whisper.",
+        ? "Transcribing and separating speakers with the local WhisperX service — long recordings take a while."
+        : "Preserving Hindi, Marathi, English, and mixed-language speech with local WhisperX transcription.",
     );
     const data = await request("/api/transcribe", {
       method: "POST",
@@ -374,10 +375,12 @@ async function generate() {
       }),
     });
     state.baseDocument = data.document;
-    state.baseDocumentMeta = `Generated with ${data.provider || "Groq"} · ${data.model}`;
+    state.baseDocumentMeta = `Generated with ${data.provider || "Claude"} · ${data.model}`;
+    state.lastTranscript = transcript;
     showDocument(data.document, "Original document", state.baseDocumentMeta, "original");
     goToStep(3);
     if (data.warning) toast(data.warning);
+    saveToHistory({ content: data.document, variant: "original", model: data.model, transcript });
     return true;
   } catch (error) {
     toast(error.message, true);
@@ -416,9 +419,10 @@ async function runDocumentTool(action, targetLanguage) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, targetLanguage, document: state.baseDocument }),
     });
-    showDocument(data.document, labels[action], `Generated with ${data.provider || "Groq"} · ${data.model}`, action);
+    showDocument(data.document, labels[action], `Generated with ${data.provider || "Claude"} · ${data.model}`, action);
     $("#translation-options").classList.add("hidden");
     toast(`${labels[action]} is ready.`);
+    saveToHistory({ content: data.document, variant: action, model: data.model, transcript: state.lastTranscript });
   } catch (error) {
     toast(error.message, true);
   } finally {
@@ -528,21 +532,161 @@ async function checkHealth() {
     state.blobConfigured = Boolean(data.blobConfigured);
     state.blobUploadMode = data.blobUploadMode || "";
     state.firefliesConfigured = Boolean(data.firefliesConfigured);
+    state.accountsConfigured = Boolean(data.accountsConfigured);
+    $("#auth-area").classList.toggle("hidden", !state.accountsConfigured);
     $("#fireflies-help").textContent = state.firefliesConfigured
       ? "Uses the transcript and speaker names already available in Fireflies."
       : "Setup needed: add FIREFLIES_API_KEY to Vercel to enable meeting-link imports.";
     const element = $("#api-status");
-    const fullyConfigured = Boolean(data.configured && data.blobConfigured);
+    const fullyConfigured = Boolean(data.transcriptionConfigured && data.documentConfigured && data.blobConfigured);
     element.classList.toggle("ready", fullyConfigured);
     element.classList.toggle("error", !fullyConfigured);
-    element.querySelector("span:last-child").textContent = !data.configured
-      ? "Groq key needed"
-      : !data.blobConfigured
-        ? "Storage setup needed"
-        : "Groq + storage ready";
+    element.querySelector("span:last-child").textContent = !data.transcriptionConfigured
+      ? "WhisperX service not running"
+      : !data.documentConfigured
+        ? "Claude key needed"
+        : !data.blobConfigured
+          ? "Storage setup needed"
+          : "WhisperX + Claude + storage ready";
   } catch {
     $("#api-status").classList.add("error");
     $("#api-status span:last-child").textContent = "Server unavailable";
+  }
+}
+
+function extractTitle(documentText, fallback) {
+  const titleLine = documentText.split(/\r?\n/).map((line) => line.replace(/^#+\s*/, "").trim()).find(Boolean);
+  return titleLine || fallback;
+}
+
+function renderAuthUI() {
+  $("#auth-guest").classList.toggle("hidden", Boolean(state.user));
+  $("#auth-user").classList.toggle("hidden", !state.user);
+  $("#auth-name").textContent = state.user?.name || "";
+}
+
+async function refreshAuthState() {
+  try {
+    const data = await request("/api/auth/me");
+    state.user = data.user || null;
+  } catch {
+    state.user = null;
+  }
+  renderAuthUI();
+}
+
+function openAuthModal(tab) {
+  $("#login-error").textContent = "";
+  $("#signup-error").textContent = "";
+  switchAuthTab(tab);
+  $("#auth-modal").classList.remove("hidden");
+  $(tab === "signup" ? "#signup-name" : "#login-email").focus();
+}
+
+function closeAuthModal() {
+  $("#auth-modal").classList.add("hidden");
+}
+
+function switchAuthTab(tab) {
+  const isSignup = tab === "signup";
+  $("#auth-tab-login").classList.toggle("active", !isSignup);
+  $("#auth-tab-signup").classList.toggle("active", isSignup);
+  $("#login-form").classList.toggle("hidden", isSignup);
+  $("#signup-form").classList.toggle("hidden", !isSignup);
+  $("#auth-modal-title").textContent = isSignup ? "Create account" : "Sign in";
+}
+
+async function saveToHistory({ content, variant, model, transcript }) {
+  if (!state.user || !content) return;
+  try {
+    await request("/api/history", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: extractTitle(content, `MCCIA ${variant}`),
+        documentType: formValues().documentType,
+        variant,
+        outputLanguage: $("#output-language").value,
+        transcript: transcript || "",
+        content,
+        model,
+      }),
+    });
+  } catch {
+    toast("Could not save this document to your history.", true);
+  }
+}
+
+function formatHistoryDate(value) {
+  try {
+    return new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  } catch {
+    return "";
+  }
+}
+
+async function openHistoryModal() {
+  $("#history-modal").classList.remove("hidden");
+  const list = $("#history-list");
+  const empty = $("#history-empty");
+  list.innerHTML = "";
+  empty.classList.add("hidden");
+  try {
+    const data = await request("/api/history");
+    if (!data.documents.length) {
+      empty.classList.remove("hidden");
+      return;
+    }
+    data.documents.forEach((entry) => {
+      const item = document.createElement("div");
+      item.className = "history-item";
+      item.innerHTML = `
+        <div class="history-item-main">
+          <span class="history-item-title"></span>
+          <span class="history-item-meta"></span>
+        </div>
+        <div class="history-item-actions">
+          <button class="text-button" type="button" data-open>Open</button>
+          <button class="text-button" type="button" data-delete>Delete</button>
+        </div>`;
+      item.querySelector(".history-item-title").textContent = entry.title;
+      item.querySelector(".history-item-meta").textContent = `${entry.documentType} · ${entry.variant} · ${formatHistoryDate(entry.createdAt)}`;
+      item.querySelector("[data-open]").addEventListener("click", () => openHistoryItem(entry.id));
+      item.querySelector("[data-delete]").addEventListener("click", () => deleteHistoryItem(entry.id, item));
+      list.append(item);
+    });
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
+function closeHistoryModal() {
+  $("#history-modal").classList.add("hidden");
+}
+
+async function openHistoryItem(id) {
+  try {
+    const data = await request(`/api/history/${id}`);
+    const entry = data.document;
+    state.baseDocument = entry.content;
+    state.baseDocumentMeta = `Generated with ${entry.model || "MCCIA"} · ${formatHistoryDate(entry.createdAt)}`;
+    state.lastTranscript = entry.transcript || "";
+    const label = entry.variant === "original" ? "Original document" : entry.title;
+    showDocument(entry.content, label, state.baseDocumentMeta, entry.variant);
+    closeHistoryModal();
+    goToStep(3);
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
+async function deleteHistoryItem(id, itemElement) {
+  try {
+    await request(`/api/history/${id}`, { method: "DELETE" });
+    itemElement.remove();
+    if (!$("#history-list").children.length) $("#history-empty").classList.remove("hidden");
+  } catch (error) {
+    toast(error.message, true);
   }
 }
 
@@ -635,5 +779,96 @@ $("#translate-confirm").addEventListener("click", () => {
   runDocumentTool("translate", $("#translation-language").value);
 });
 
+$("#open-login").addEventListener("click", () => openAuthModal("login"));
+$("#open-signup").addEventListener("click", () => openAuthModal("signup"));
+$("#auth-modal-close").addEventListener("click", closeAuthModal);
+$("#auth-modal").addEventListener("click", (event) => { if (event.target.id === "auth-modal") closeAuthModal(); });
+$("#auth-tab-login").addEventListener("click", () => switchAuthTab("login"));
+$("#auth-tab-signup").addEventListener("click", () => switchAuthTab("signup"));
+
+$("#login-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  $("#login-error").textContent = "";
+  try {
+    const data = await request("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: $("#login-email").value, password: $("#login-password").value }),
+    });
+    state.user = data.user;
+    renderAuthUI();
+    closeAuthModal();
+    toast(`Welcome back, ${data.user.name}.`);
+  } catch (error) {
+    $("#login-error").textContent = error.message;
+  }
+});
+
+$("#signup-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  $("#signup-error").textContent = "";
+  try {
+    const data = await request("/api/auth/signup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: $("#signup-name").value, email: $("#signup-email").value, password: $("#signup-password").value }),
+    });
+    state.user = data.user;
+    renderAuthUI();
+    closeAuthModal();
+    toast(`Welcome, ${data.user.name}. Your account is ready.`);
+  } catch (error) {
+    $("#signup-error").textContent = error.message;
+  }
+});
+
+$("#logout-button").addEventListener("click", async () => {
+  try {
+    await request("/api/auth/logout", { method: "POST" });
+  } catch {
+    // Session cookie is cleared server-side regardless; ignore network errors here.
+  }
+  state.user = null;
+  renderAuthUI();
+  toast("Signed out.");
+});
+
+$("#open-history").addEventListener("click", openHistoryModal);
+$("#history-modal-close").addEventListener("click", closeHistoryModal);
+$("#history-modal").addEventListener("click", (event) => { if (event.target.id === "history-modal") closeHistoryModal(); });
+
+function animateHeroCounters() {
+  const items = $$(".hero-facts dt");
+  if (!items.length) return;
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+  const countUp = (element) => {
+    const match = element.textContent.trim().match(/^(\d+)(.*)$/);
+    if (!match) return;
+    const target = Number(match[1]);
+    const suffix = match[2];
+    const duration = 1800;
+    const start = performance.now();
+    const step = (now) => {
+      const progress = Math.min(1, (now - start) / duration);
+      const eased = 1 - (1 - progress) ** 3;
+      element.textContent = `${Math.round(target * eased).toLocaleString("en-IN")}${suffix}`;
+      if (progress < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  };
+
+  const observer = new IntersectionObserver((entries, obs) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      obs.unobserve(entry.target);
+      countUp(entry.target);
+    });
+  }, { threshold: 0.1 });
+  items.forEach((item) => observer.observe(item));
+}
+
 checkHealth();
+refreshAuthState();
+animateHeroCounters();
 window.addEventListener("beforeunload", releaseMicrophone);

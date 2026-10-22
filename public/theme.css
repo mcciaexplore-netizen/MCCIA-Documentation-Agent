@@ -1,0 +1,84 @@
+@font-face {
+  font-family: "Hind MCCIA";
+  src: url("/assets/fonts/Hind-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Hind MCCIA";
+  src: url("/assets/fonts/Hind-Bold.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+:root {
+  --blue: #003f8a;
+  --blue-dark: #002d63;
+  --blue-light: #0056b3;
+  --green: #10b981;
+  --green-text: #059669;
+  --red: #ef4444;
+  --purple: #8b5cf6;
+
+  --ink: #0f172a;
+  --muted: #475569;
+  --subtle: #64748b;
+  --line: rgba(226, 232, 240, 0.85);
+  --line-hover: rgba(0, 63, 138, 0.25);
+
+  --page-bg: #ffffff;
+  --page-bg-alt: #f8fafc;
+  --card-bg: rgba(255, 255, 255, 0.7);
+  --card-bg-hover: rgba(255, 255, 255, 0.95);
+
+  --blue-tint-bg: rgba(0, 63, 138, 0.06);
+  --blue-tint-bg-strong: rgba(0, 63, 138, 0.08);
+  --blue-tint-border: rgba(0, 63, 138, 0.13);
+  --green-tint-bg: rgba(16, 185, 129, 0.07);
+  --green-tint-bg-strong: rgba(16, 185, 129, 0.08);
+  --green-tint-border: rgba(16, 185, 129, 0.13);
+  --red-tint-bg: rgba(239, 68, 68, 0.07);
+  --red-tint-border: rgba(239, 68, 68, 0.14);
+
+  --gradient-primary: linear-gradient(135deg, #003f8a 0%, #0056b3 100%);
+  --gradient-page: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+
+  --radius-sm: 8px;
+  --radius-btn: 10px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-pill: 99px;
+
+  --shadow-card: 0 15px 40px -10px rgba(0, 63, 138, 0.04);
+  --shadow-card-hover: 0 20px 40px rgba(0, 63, 138, 0.08);
+  --shadow-btn: 0 4px 15px rgba(0, 63, 138, 0.15);
+  --shadow-btn-hover: 0 8px 25px rgba(0, 63, 138, 0.25);
+
+  --display: "Bricolage Grotesque", Georgia, "Nirmala UI", serif;
+  --sans: "Outfit", "Hind MCCIA", Inter, "Segoe UI", "Nirmala UI", sans-serif;
+  --mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration: 0.3s;
+  --duration-sm: 0.2s;
+
+  /* Legacy aliases kept so every existing component rule in styles.css
+     resolves to the new palette without a second find-and-replace pass. */
+  --ink-soft: var(--muted);
+  --paper: var(--page-bg-alt);
+  --card: var(--card-bg-hover);
+  --line-strong: var(--line-hover);
+  --blue-pale: var(--blue-tint-bg);
+  --green-pale: var(--green-tint-bg);
+  --danger: var(--red);
+  --shadow-sm: var(--shadow-card);
+  --shadow-lg: var(--shadow-card-hover);
+}
+
+/* This app has no dark mode (no toggle, no dark-aware components), so the
+   theme stays light-only per the design brief: "Light theme only unless
+   the app already has dark mode." A prefers-color-scheme block was tried
+   here and caused unreadable contrast in dark-OS environments; removed. */

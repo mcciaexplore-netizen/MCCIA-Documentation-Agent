@@ -15,8 +15,8 @@
   },
   "dependencies": {
     "@vercel/blob": "^2.8.0",
-    "ffmpeg-static": "^5.2.0",
-    "pdfkit": "^0.17.0"
+    "pdfkit": "^0.17.0",
+    "pg": "^8.13.1"
   },
   "devDependencies": {
     "esbuild": "^0.28.2"
