@@ -14,7 +14,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@vercel/blob": "^2.8.0",
+    "@supabase/supabase-js": "^2.118.0",
     "ffmpeg-static": "^5.3.0",
     "pdfkit": "^0.17.0",
     "pg": "^8.13.1"

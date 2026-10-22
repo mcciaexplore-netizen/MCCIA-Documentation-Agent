@@ -1,13 +1,11 @@
 import http from "node:http";
-import { createWriteStream } from "node:fs";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
-import { del, get, issueSignedToken } from "@vercel/blob";
-import { handleUpload, handleUploadPresigned } from "@vercel/blob/client";
+import { createClient } from "@supabase/supabase-js";
 import ffmpegPath from "ffmpeg-static";
 import { combineGroqTranscriptions, firefliesTranscriptId, normalizeFirefliesTranscript, safeDownloadName, splitTranscriptForModel } from "./lib/core.js";
 import { createQuotaFallbackDocument } from "./lib/fallback-document.js";
@@ -36,11 +34,16 @@ await loadLocalEnv(path.join(ROOT, ".env"));
 
 const PORT = Number(process.env.PORT) || 3000;
 const MAX_UPLOAD_BYTES = (Number(process.env.MAX_AUDIO_UPLOAD_MB) || 200) * 1024 * 1024;
+const SUPABASE_URL = process.env.SUPABASE_URL || "";
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "";
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const SUPABASE_STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || "recordings";
 const GROQ_TRANSCRIPTION_MODEL = process.env.GROQ_TRANSCRIPTION_MODEL || "whisper-large-v3-turbo";
 const CLAUDE_DOCUMENT_MODEL = process.env.CLAUDE_DOCUMENT_MODEL || "claude-sonnet-5-5";
 const CLAUDE_FOLLOWUP_MODEL = process.env.CLAUDE_FOLLOWUP_MODEL || CLAUDE_DOCUMENT_MODEL;
 const ANTHROPIC_API_BASE = "https://api.anthropic.com/v1";
 const ANTHROPIC_VERSION = "2023-06-01";
+const ANTHROPIC_WORKSPACE_ID = process.env.ANTHROPIC_WORKSPACE_ID || "";
 const GROQ_API_BASE = "https://api.groq.com/openai/v1";
 const FIREFLIES_API_URL = "https://api.fireflies.ai/graphql";
 const GROQ_MAX_CHUNK_BYTES = 24 * 1024 * 1024;
@@ -190,6 +193,7 @@ async function anthropicRequest(url, options = {}) {
     headers: {
       "x-api-key": requireClaudeKey(),
       "anthropic-version": ANTHROPIC_VERSION,
+      ...(ANTHROPIC_WORKSPACE_ID ? { "anthropic-workspace-id": ANTHROPIC_WORKSPACE_ID } : {}),
       ...options.headers,
     },
   });
@@ -385,116 +389,86 @@ function normalizeUploadInput(input) {
   return { filename, mimeType, size };
 }
 
-function requireBlobStorage() {
-  if (!blobUploadMode()) {
-    const error = new Error("Large-file storage is not configured. Connect a private Vercel Blob store to this project.");
+function supabaseStorageConfigured() {
+  return Boolean(SUPABASE_URL && SUPABASE_ANON_KEY && SUPABASE_SERVICE_ROLE_KEY);
+}
+
+function requireSupabaseStorage() {
+  if (!supabaseStorageConfigured()) {
+    const error = new Error("Large-file storage is not configured. Add SUPABASE_URL, SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY to the environment.");
     error.status = 503;
     throw error;
   }
 }
 
-function blobUploadMode() {
-  if (process.env.BLOB_READ_WRITE_TOKEN) return "token";
-  if (process.env.BLOB_STORE_ID && process.env.BLOB_WEBHOOK_PUBLIC_KEY) return "oidc";
-  return "";
-}
-
-function validateBlobPath(pathname) {
-  const normalizedPath = String(pathname || "").replace(/\\/g, "/");
-  if (!/^recordings\/[^/]+\.(mp3|mpeg|mpga|m4a|wav|webm|ogg|flac|aac|aiff|opus|mp4|mov|mkv)$/i.test(normalizedPath)) {
-    const error = new Error("Unsupported recording filename.");
-    error.status = 415;
-    throw error;
+let supabaseAdminClient = null;
+function getSupabaseAdmin() {
+  requireSupabaseStorage();
+  if (!supabaseAdminClient) {
+    supabaseAdminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
   }
-  return normalizedPath;
+  return supabaseAdminClient;
 }
 
-async function createBlobUploadToken(request, response) {
-  requireBlobStorage();
-  const body = parseJsonBody(await readBody(request, 64 * 1024));
-  const allowedContentTypes = ["audio/*", "video/*", "application/ogg", "application/octet-stream"];
-  const result = blobUploadMode() === "oidc"
-    ? await handleUploadPresigned({
-        request,
-        body,
-        getSignedToken: async (pathname) => {
-          const safePath = validateBlobPath(pathname);
-          const validUntil = Date.now() + 60 * 60 * 1000;
-          return {
-            token: await issueSignedToken({
-              pathname: safePath,
-              operations: ["put"],
-              allowedContentTypes,
-              maximumSizeInBytes: MAX_UPLOAD_BYTES,
-              validUntil,
-            }),
-            urlOptions: {
-              allowedContentTypes,
-              maximumSizeInBytes: MAX_UPLOAD_BYTES,
-              validUntil,
-              addRandomSuffix: true,
-              cacheControlMaxAge: 60,
-            },
-          };
-        },
-      })
-    : await handleUpload({
-        request,
-        body,
-        onBeforeGenerateToken: async (pathname) => {
-          validateBlobPath(pathname);
-          return {
-            allowedContentTypes,
-            maximumSizeInBytes: MAX_UPLOAD_BYTES,
-            addRandomSuffix: true,
-            cacheControlMaxAge: 60,
-          };
-        },
-      });
-  sendJson(response, 200, result);
-}
-
-function validatePrivateBlobUrl(value) {
-  let url;
-  try {
-    url = new URL(String(value || ""));
-  } catch {
+function validateStoragePath(value) {
+  const normalized = String(value || "").replace(/\\/g, "/");
+  if (!/^[A-Za-z0-9._-]+\.(mp3|mpeg|mpga|m4a|wav|webm|ogg|flac|aac|aiff|opus|mp4|mov|mkv)$/i.test(normalized)) {
     const error = new Error("Invalid recording upload reference.");
     error.status = 400;
     throw error;
   }
-  if (url.protocol !== "https:" || !url.hostname.endsWith(".private.blob.vercel-storage.com")) {
-    const error = new Error("Recording must come from this project's private upload storage.");
-    error.status = 400;
+  return normalized;
+}
+
+async function createStorageUploadToken(request, response) {
+  requireSupabaseStorage();
+  const input = parseJsonBody(await readBody(request, 64 * 1024));
+  const filename = path.basename(String(input?.filename || "recording.webm")).slice(0, 200);
+  if (!/\.(mp3|mpeg|mpga|m4a|wav|webm|ogg|flac|aac|aiff|opus|mp4|mov|mkv)$/i.test(filename)) {
+    const error = new Error("Unsupported recording filename.");
+    error.status = 415;
     throw error;
   }
-  return url.toString();
+  const safeName = filename.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+/, "") || "recording.webm";
+  const objectPath = `${crypto.randomUUID()}-${safeName}`;
+
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase.storage.from(SUPABASE_STORAGE_BUCKET).createSignedUploadUrl(objectPath);
+  if (error || !data) {
+    const uploadError = new Error(error?.message || "Could not prepare a secure upload slot.");
+    uploadError.status = 502;
+    throw uploadError;
+  }
+  sendJson(response, 200, { bucket: SUPABASE_STORAGE_BUCKET, path: data.path, token: data.token, signedUrl: data.signedUrl });
 }
 
-async function deletePrivateBlob(blobUrl) {
-  if (!blobUrl) return;
+async function deleteStorageObject(objectPath) {
+  if (!objectPath) return;
   try {
-    await del(blobUrl);
+    const supabase = getSupabaseAdmin();
+    const { error } = await supabase.storage.from(SUPABASE_STORAGE_BUCKET).remove([objectPath]);
+    if (error) console.warn(`Could not delete temporary recording: ${error.message}`);
   } catch (error) {
-    console.warn(`Could not delete temporary private recording: ${error.message}`);
+    console.warn(`Could not delete temporary recording: ${error.message}`);
   }
 }
 
-async function getPrivateRecording(blobUrl) {
-  requireBlobStorage();
-  const safeUrl = validatePrivateBlobUrl(blobUrl);
+async function getStorageRecording(objectPath) {
+  const safePath = validateStoragePath(objectPath);
+  const supabase = getSupabaseAdmin();
   let lastError;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
-      const result = await get(safeUrl, { access: "private", useCache: false });
-      if (result?.statusCode === 200 && result.stream) return result;
+      const { data, error } = await supabase.storage.from(SUPABASE_STORAGE_BUCKET).download(safePath);
+      if (!error && data) return data;
+      lastError = error;
     } catch (error) {
       lastError = error;
     }
     if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 500 * (2 ** attempt)));
   }
-  if (lastError) console.warn(`Private recording read failed after retries: ${lastError.message}`);
-  const error = new Error("The recording uploaded, but private storage was not ready to read it. Please try once more.");
+  if (lastError) console.warn(`Recording download failed after retries: ${lastError.message || lastError}`);
+  const error = new Error("The recording uploaded, but storage was not ready to read it. Please try once more.");
   error.status = 502;
   throw error;
 }
@@ -516,19 +490,20 @@ function runFfmpeg(args) {
   });
 }
 
-async function prepareGroqChunks(blobUrl, filename) {
-  const recording = await getPrivateRecording(blobUrl);
+async function prepareGroqChunks(objectPath, filename) {
+  const recordingBlob = await getStorageRecording(objectPath);
+  const recordingBuffer = Buffer.from(await recordingBlob.arrayBuffer());
   normalizeUploadInput({
     filename,
-    mimeType: recording.blob.contentType || "application/octet-stream",
-    size: recording.blob.size,
+    mimeType: recordingBlob.type || "application/octet-stream",
+    size: recordingBuffer.length,
   });
 
   const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "mccia-groq-"));
   try {
     const inputExtension = path.extname(filename).toLowerCase().replace(/[^.a-z0-9]/g, "") || ".audio";
     const inputPath = path.join(tempDirectory, `source${inputExtension}`);
-    await pipeline(recording.stream, createWriteStream(inputPath));
+    await fs.writeFile(inputPath, recordingBuffer);
 
     const outputPattern = path.join(tempDirectory, "chunk-%03d.mp3");
     await runFfmpeg([
@@ -599,13 +574,13 @@ async function mapWithConcurrency(items, concurrency, operation) {
 async function transcribeWithGroq(request, response) {
   requireGroqKey();
   const input = parseJsonBody(await readBody(request, 32 * 1024));
-  const blobUrl = validatePrivateBlobUrl(input?.blobUrl);
+  const objectPath = validateStoragePath(input?.path);
   const filename = path.basename(String(input?.filename || "recording.webm")).slice(0, 200);
   const durationSeconds = Math.max(0, Number(input?.durationSeconds) || 0);
   let prepared;
 
   try {
-    prepared = await prepareGroqChunks(blobUrl, filename);
+    prepared = await prepareGroqChunks(objectPath, filename);
     const chunkResults = await mapWithConcurrency(
       prepared.chunkPaths,
       GROQ_CHUNK_CONCURRENCY,
@@ -634,7 +609,7 @@ async function transcribeWithGroq(request, response) {
     throw error;
   } finally {
     await removeAudioTempDirectory(prepared?.tempDirectory).catch((error) => console.warn(`Could not remove temporary audio: ${error.message}`));
-    await deletePrivateBlob(blobUrl);
+    await deleteStorageObject(objectPath);
   }
 }
 
@@ -880,8 +855,9 @@ const server = http.createServer(async (request, response) => {
         configured: transcriptionConfigured && documentConfigured,
         transcriptionConfigured,
         documentConfigured,
-        blobConfigured: Boolean(blobUploadMode()),
-        blobUploadMode: blobUploadMode(),
+        storageConfigured: supabaseStorageConfigured(),
+        supabaseUrl: SUPABASE_URL,
+        supabaseAnonKey: SUPABASE_ANON_KEY,
         firefliesConfigured: Boolean(process.env.FIREFLIES_API_KEY),
         accountsConfigured: isAccountsConfigured(),
         agent: AGENT_NAME,
@@ -893,8 +869,8 @@ const server = http.createServer(async (request, response) => {
       });
       return;
     }
-    if (request.method === "POST" && url.pathname === "/api/uploads/blob-token") {
-      await createBlobUploadToken(request, response);
+    if (request.method === "POST" && url.pathname === "/api/uploads/storage-token") {
+      await createStorageUploadToken(request, response);
       return;
     }
     if (request.method === "POST" && url.pathname === "/api/transcribe") {

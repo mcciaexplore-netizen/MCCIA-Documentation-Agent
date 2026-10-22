@@ -1,4 +1,4 @@
-import { upload, uploadPresigned } from "@vercel/blob/client";
+import { createClient } from "@supabase/supabase-js";
 
 const state = {
   file: null,
@@ -15,8 +15,8 @@ const state = {
   recordingTimer: null,
   recordingUrl: "",
   durationPromise: null,
-  blobConfigured: false,
-  blobUploadMode: "",
+  storageConfigured: false,
+  supabase: null,
   firefliesConfigured: false,
   accountsConfigured: false,
   user: null,
@@ -277,21 +277,22 @@ async function request(url, options) {
 }
 
 async function uploadRecording(file) {
-  if (!state.blobConfigured) {
-    throw new Error("Large-file storage is not configured. Connect a private Vercel Blob store to this project, then redeploy.");
+  if (!state.storageConfigured || !state.supabase) {
+    throw new Error("Large-file storage is not configured. Connect Supabase Storage to this project, then redeploy.");
   }
-  const safeName = file.name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+/, "") || "recording.webm";
-  const uploadRecordingFile = state.blobUploadMode === "oidc" ? uploadPresigned : upload;
-  const blob = await uploadRecordingFile(`recordings/${safeName}`, file, {
-    access: "private",
-    handleUploadUrl: "/api/uploads/blob-token",
-    multipart: file.size > 5 * 1024 * 1024,
-    contentType: file.type || "application/octet-stream",
-    onUploadProgress: ({ percentage }) => {
-      setBusy(true, "Uploading securely…", `Sending directly to private storage · ${Math.round(percentage)}%`);
-    },
+  setBusy(true, "Uploading securely…", "Sending directly to private storage.");
+  const tokenResponse = await request("/api/uploads/storage-token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename: file.name }),
   });
-  return blob.url;
+  const { error } = await state.supabase.storage
+    .from(tokenResponse.bucket)
+    .uploadToSignedUrl(tokenResponse.path, tokenResponse.token, file, {
+      contentType: file.type || "application/octet-stream",
+    });
+  if (error) throw new Error(error.message || "The recording could not be uploaded.");
+  return tokenResponse.path;
 }
 
 function renderMetadata(data) {
@@ -321,7 +322,7 @@ async function transcribe() {
   setBusy(true, "Preparing recording…", "Checking the file securely before transcription.");
   try {
     const durationSeconds = Number(await state.durationPromise) || 0;
-    const blobUrl = await uploadRecording(state.file);
+    const path = await uploadRecording(state.file);
     const longRecording = durationSeconds > 30 * 60;
     setBusy(
       true,
@@ -333,7 +334,7 @@ async function transcribe() {
     const data = await request("/api/transcribe", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ blobUrl, filename: state.file.name, mimeType: state.file.type, durationSeconds }),
+      body: JSON.stringify({ path, filename: state.file.name, mimeType: state.file.type, durationSeconds }),
     });
     state.transcription = data;
     $("#transcript").value = data.text;
@@ -531,8 +532,10 @@ function reset() {
 async function checkHealth() {
   try {
     const data = await request("/api/health");
-    state.blobConfigured = Boolean(data.blobConfigured);
-    state.blobUploadMode = data.blobUploadMode || "";
+    state.storageConfigured = Boolean(data.storageConfigured);
+    if (state.storageConfigured && data.supabaseUrl && data.supabaseAnonKey) {
+      state.supabase = createClient(data.supabaseUrl, data.supabaseAnonKey);
+    }
     state.firefliesConfigured = Boolean(data.firefliesConfigured);
     state.accountsConfigured = Boolean(data.accountsConfigured);
     $("#auth-area").classList.toggle("hidden", !state.accountsConfigured);
@@ -540,14 +543,14 @@ async function checkHealth() {
       ? "Uses the transcript and speaker names already available in Fireflies."
       : "Setup needed: add FIREFLIES_API_KEY to Vercel to enable meeting-link imports.";
     const element = $("#api-status");
-    const fullyConfigured = Boolean(data.transcriptionConfigured && data.documentConfigured && data.blobConfigured);
+    const fullyConfigured = Boolean(data.transcriptionConfigured && data.documentConfigured && data.storageConfigured);
     element.classList.toggle("ready", fullyConfigured);
     element.classList.toggle("error", !fullyConfigured);
     element.querySelector("span:last-child").textContent = !data.transcriptionConfigured
       ? "Groq key needed"
       : !data.documentConfigured
         ? "Claude key needed"
-        : !data.blobConfigured
+        : !data.storageConfigured
           ? "Storage setup needed"
           : "Groq + Claude + storage ready";
   } catch {
