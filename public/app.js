@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { compressForUpload } from "./compress-audio.js";
 
 const HISTORY_STORAGE_KEY = "mccia_history";
 const MAX_HISTORY_ENTRIES = 30;
@@ -120,10 +121,10 @@ async function startRecording() {
   if (state.recordingUrl) discardRecording();
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
     const mimeType = recordingMimeType();
-    const recorderOptions = { audioBitsPerSecond: 48_000 };
+    const recorderOptions = { audioBitsPerSecond: 32_000 };
     if (mimeType) recorderOptions.mimeType = mimeType;
     const recorder = new MediaRecorder(stream, recorderOptions);
     state.mediaStream = stream;
@@ -295,10 +296,14 @@ async function request(url, options) {
   return payload;
 }
 
-async function uploadRecording(file) {
+async function uploadRecording(original, durationSeconds) {
   if (!state.storageConfigured || !state.supabase) {
     throw new Error("Large-file storage is not configured. Connect Supabase Storage to this project, then redeploy.");
   }
+  setBusy(true, "Compressing audio…", "Shrinking the file so it uploads faster.");
+  const file = await compressForUpload(original, durationSeconds, (progress) => {
+    setBusy(true, "Compressing audio…", `${Math.round(progress * 100)}% — shrinking the file so it uploads faster.`);
+  });
   setBusy(true, "Uploading securely…", "Sending directly to private storage.");
   const tokenResponse = await request("/api/uploads/storage-token", {
     method: "POST",
@@ -311,7 +316,7 @@ async function uploadRecording(file) {
       contentType: file.type || "application/octet-stream",
     });
   if (error) throw new Error(error.message || "The recording could not be uploaded.");
-  return tokenResponse.path;
+  return { path: tokenResponse.path, file };
 }
 
 function renderMetadata(data) {
@@ -341,7 +346,7 @@ async function transcribe() {
   setBusy(true, "Preparing recording…", "Checking the file securely before transcription.");
   try {
     const durationSeconds = Number(await state.durationPromise) || 0;
-    const path = await uploadRecording(state.file);
+    const { path, file: uploaded } = await uploadRecording(state.file, durationSeconds);
     const longRecording = durationSeconds > 30 * 60;
     setBusy(
       true,
@@ -353,7 +358,7 @@ async function transcribe() {
     const data = await request("/api/transcribe", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path, filename: state.file.name, mimeType: state.file.type, durationSeconds }),
+      body: JSON.stringify({ path, filename: uploaded.name, mimeType: uploaded.type, durationSeconds }),
     });
     state.transcription = data;
     $("#transcript").value = data.text;
