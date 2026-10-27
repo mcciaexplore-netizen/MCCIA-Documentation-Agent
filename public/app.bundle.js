@@ -20793,6 +20793,23 @@ ${suffix}`;
   if (shouldShowDeprecationWarning()) console.warn("\u26A0\uFE0F  Node.js 20 and below are deprecated and will no longer be supported in future versions of @supabase/supabase-js. Please upgrade to Node.js 22 or later. For more information, visit: https://github.com/orgs/supabase/discussions/45715");
 
   // public/app.js
+  var HISTORY_STORAGE_KEY = "mccia_history";
+  var MAX_HISTORY_ENTRIES = 30;
+  function loadHistoryEntries() {
+    try {
+      const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  function persistHistoryEntries(entries) {
+    try {
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(entries.slice(0, MAX_HISTORY_ENTRIES)));
+    } catch {
+    }
+  }
   var state = {
     file: null,
     transcription: null,
@@ -20811,8 +20828,6 @@ ${suffix}`;
     storageConfigured: false,
     supabase: null,
     firefliesConfigured: false,
-    accountsConfigured: false,
-    user: null,
     lastTranscript: ""
   };
   var $ = (selector) => document.querySelector(selector);
@@ -21271,8 +21286,6 @@ ${suffix}`;
         state.supabase = createClient(data.supabaseUrl, data.supabaseAnonKey);
       }
       state.firefliesConfigured = Boolean(data.firefliesConfigured);
-      state.accountsConfigured = Boolean(data.accountsConfigured);
-      $("#auth-area").classList.toggle("hidden", !state.accountsConfigured);
       $("#fireflies-help").textContent = state.firefliesConfigured ? "Uses the transcript and speaker names already available in Fireflies." : "Setup needed: add FIREFLIES_API_KEY to Vercel to enable meeting-link imports.";
       const element = $("#api-status");
       const fullyConfigured = Boolean(data.transcriptionConfigured && data.documentConfigured && data.storageConfigured);
@@ -21288,57 +21301,20 @@ ${suffix}`;
     const titleLine = documentText.split(/\r?\n/).map((line) => line.replace(/^#+\s*/, "").trim()).find(Boolean);
     return titleLine || fallback;
   }
-  function renderAuthUI() {
-    $("#auth-guest").classList.toggle("hidden", Boolean(state.user));
-    $("#auth-user").classList.toggle("hidden", !state.user);
-    $("#auth-name").textContent = state.user?.name || "";
-  }
-  async function refreshAuthState() {
-    try {
-      const data = await request("/api/auth/me");
-      state.user = data.user || null;
-    } catch {
-      state.user = null;
-    }
-    renderAuthUI();
-  }
-  function openAuthModal(tab) {
-    $("#login-error").textContent = "";
-    $("#signup-error").textContent = "";
-    switchAuthTab(tab);
-    $("#auth-modal").classList.remove("hidden");
-    $(tab === "signup" ? "#signup-name" : "#login-email").focus();
-  }
-  function closeAuthModal() {
-    $("#auth-modal").classList.add("hidden");
-  }
-  function switchAuthTab(tab) {
-    const isSignup = tab === "signup";
-    $("#auth-tab-login").classList.toggle("active", !isSignup);
-    $("#auth-tab-signup").classList.toggle("active", isSignup);
-    $("#login-form").classList.toggle("hidden", isSignup);
-    $("#signup-form").classList.toggle("hidden", !isSignup);
-    $("#auth-modal-title").textContent = isSignup ? "Create account" : "Sign in";
-  }
-  async function saveToHistory({ content, variant, model, transcript }) {
-    if (!state.user || !content) return;
-    try {
-      await request("/api/history", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: extractTitle(content, `MCCIA ${variant}`),
-          documentType: formValues().documentType,
-          variant,
-          outputLanguage: $("#output-language").value,
-          transcript: transcript || "",
-          content,
-          model
-        })
-      });
-    } catch {
-      toast("Could not save this document to your history.", true);
-    }
+  function saveToHistory({ content, variant, model, transcript }) {
+    if (!content) return;
+    const entry = {
+      id: crypto.randomUUID(),
+      title: extractTitle(content, `MCCIA ${variant}`),
+      documentType: formValues().documentType,
+      variant,
+      outputLanguage: $("#output-language").value,
+      transcript: transcript || "",
+      content,
+      model,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    persistHistoryEntries([entry, ...loadHistoryEntries()]);
   }
   function formatHistoryDate(value) {
     try {
@@ -21347,66 +21323,53 @@ ${suffix}`;
       return "";
     }
   }
-  async function openHistoryModal() {
+  function openHistoryModal() {
     $("#history-modal").classList.remove("hidden");
     const list = $("#history-list");
     const empty = $("#history-empty");
     list.innerHTML = "";
-    empty.classList.add("hidden");
-    try {
-      const data = await request("/api/history");
-      if (!data.documents.length) {
-        empty.classList.remove("hidden");
-        return;
-      }
-      data.documents.forEach((entry) => {
-        const item = document.createElement("div");
-        item.className = "history-item";
-        item.innerHTML = `
-        <div class="history-item-main">
-          <span class="history-item-title"></span>
-          <span class="history-item-meta"></span>
-        </div>
-        <div class="history-item-actions">
-          <button class="text-button" type="button" data-open>Open</button>
-          <button class="text-button" type="button" data-delete>Delete</button>
-        </div>`;
-        item.querySelector(".history-item-title").textContent = entry.title;
-        item.querySelector(".history-item-meta").textContent = `${entry.documentType} \xB7 ${entry.variant} \xB7 ${formatHistoryDate(entry.createdAt)}`;
-        item.querySelector("[data-open]").addEventListener("click", () => openHistoryItem(entry.id));
-        item.querySelector("[data-delete]").addEventListener("click", () => deleteHistoryItem(entry.id, item));
-        list.append(item);
-      });
-    } catch (error) {
-      toast(error.message, true);
-    }
+    const entries = loadHistoryEntries();
+    empty.classList.toggle("hidden", entries.length > 0);
+    entries.forEach((entry) => {
+      const item = document.createElement("div");
+      item.className = "history-item";
+      item.innerHTML = `
+      <div class="history-item-main">
+        <span class="history-item-title"></span>
+        <span class="history-item-meta"></span>
+      </div>
+      <div class="history-item-actions">
+        <button class="text-button" type="button" data-open>Open</button>
+        <button class="text-button" type="button" data-delete>Delete</button>
+      </div>`;
+      item.querySelector(".history-item-title").textContent = entry.title;
+      item.querySelector(".history-item-meta").textContent = `${entry.documentType} \xB7 ${entry.variant} \xB7 ${formatHistoryDate(entry.createdAt)}`;
+      item.querySelector("[data-open]").addEventListener("click", () => openHistoryItem(entry.id));
+      item.querySelector("[data-delete]").addEventListener("click", () => deleteHistoryItem(entry.id, item));
+      list.append(item);
+    });
   }
   function closeHistoryModal() {
     $("#history-modal").classList.add("hidden");
   }
-  async function openHistoryItem(id) {
-    try {
-      const data = await request(`/api/history/${id}`);
-      const entry = data.document;
-      state.baseDocument = entry.content;
-      state.baseDocumentMeta = `Generated with ${entry.model || "MCCIA"} \xB7 ${formatHistoryDate(entry.createdAt)}`;
-      state.lastTranscript = entry.transcript || "";
-      const label = entry.variant === "original" ? "Original document" : entry.title;
-      showDocument(entry.content, label, state.baseDocumentMeta, entry.variant);
-      closeHistoryModal();
-      goToStep(3);
-    } catch (error) {
-      toast(error.message, true);
+  function openHistoryItem(id) {
+    const entry = loadHistoryEntries().find((item) => item.id === id);
+    if (!entry) {
+      toast("This document was not found.", true);
+      return;
     }
+    state.baseDocument = entry.content;
+    state.baseDocumentMeta = `Generated with ${entry.model || "MCCIA"} \xB7 ${formatHistoryDate(entry.createdAt)}`;
+    state.lastTranscript = entry.transcript || "";
+    const label = entry.variant === "original" ? "Original document" : entry.title;
+    showDocument(entry.content, label, state.baseDocumentMeta, entry.variant);
+    closeHistoryModal();
+    goToStep(3);
   }
-  async function deleteHistoryItem(id, itemElement) {
-    try {
-      await request(`/api/history/${id}`, { method: "DELETE" });
-      itemElement.remove();
-      if (!$("#history-list").children.length) $("#history-empty").classList.remove("hidden");
-    } catch (error) {
-      toast(error.message, true);
-    }
+  function deleteHistoryItem(id, itemElement) {
+    persistHistoryEntries(loadHistoryEntries().filter((entry) => entry.id !== id));
+    itemElement.remove();
+    if (!$("#history-list").children.length) $("#history-empty").classList.remove("hidden");
   }
   $$(`input[name="document-type"]`).forEach((input) => input.addEventListener("change", () => {
     $$(".type-card").forEach((card) => card.classList.toggle("selected", card.contains($("input[name='document-type']:checked"))));
@@ -21496,57 +21459,6 @@ ${suffix}`;
   $("#translate-confirm").addEventListener("click", () => {
     runDocumentTool("translate", $("#translation-language").value);
   });
-  $("#open-login").addEventListener("click", () => openAuthModal("login"));
-  $("#open-signup").addEventListener("click", () => openAuthModal("signup"));
-  $("#auth-modal-close").addEventListener("click", closeAuthModal);
-  $("#auth-modal").addEventListener("click", (event) => {
-    if (event.target.id === "auth-modal") closeAuthModal();
-  });
-  $("#auth-tab-login").addEventListener("click", () => switchAuthTab("login"));
-  $("#auth-tab-signup").addEventListener("click", () => switchAuthTab("signup"));
-  $("#login-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    $("#login-error").textContent = "";
-    try {
-      const data = await request("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: $("#login-email").value, password: $("#login-password").value })
-      });
-      state.user = data.user;
-      renderAuthUI();
-      closeAuthModal();
-      toast(`Welcome back, ${data.user.name}.`);
-    } catch (error) {
-      $("#login-error").textContent = error.message;
-    }
-  });
-  $("#signup-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    $("#signup-error").textContent = "";
-    try {
-      const data = await request("/api/auth/signup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: $("#signup-name").value, email: $("#signup-email").value, password: $("#signup-password").value })
-      });
-      state.user = data.user;
-      renderAuthUI();
-      closeAuthModal();
-      toast(`Welcome, ${data.user.name}. Your account is ready.`);
-    } catch (error) {
-      $("#signup-error").textContent = error.message;
-    }
-  });
-  $("#logout-button").addEventListener("click", async () => {
-    try {
-      await request("/api/auth/logout", { method: "POST" });
-    } catch {
-    }
-    state.user = null;
-    renderAuthUI();
-    toast("Signed out.");
-  });
   $("#open-history").addEventListener("click", openHistoryModal);
   $("#history-modal-close").addEventListener("click", closeHistoryModal);
   $("#history-modal").addEventListener("click", (event) => {
@@ -21581,7 +21493,6 @@ ${suffix}`;
     items.forEach((item) => observer.observe(item));
   }
   checkHealth();
-  refreshAuthState();
   animateHeroCounters();
   window.addEventListener("beforeunload", releaseMicrophone);
 })();

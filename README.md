@@ -23,7 +23,6 @@ The MCCIA Documentation Agent is a Groq-powered multilingual documentation tool 
 - Large audio uploads go directly to private Supabase Storage from the browser, bypassing Vercel's function request-body limit
 - Private recordings are converted and sent to Groq as valid audio chunks
 - Temporary private Storage uploads are deleted immediately after transcription
-- Optional accounts: sign up, sign in, and automatically save generated documents (with their source transcript) to a personal history you can reopen or delete later, backed by Supabase Postgres
 
 ## Run locally
 
@@ -62,7 +61,6 @@ Node.js 20 or newer is required. Production also needs a Supabase project with a
 | `GROQ_CHUNK_CONCURRENCY` | `2` | Parallel Groq transcription requests (1–4) |
 | `PORT` | `3000` | Local server port |
 | `MAX_AUDIO_UPLOAD_MB` | `200` | Maximum audio size accepted by Storage upload and Groq processing |
-| `DATABASE_URL` | optional | Supabase (or any) Postgres connection string. Enables accounts, login, and saved document history; without it the app works exactly as before, just without accounts |
 
 ## Supabase Storage setup
 
@@ -84,17 +82,6 @@ Every recording is converted server-side to 16 kHz mono MP3 and divided into 15-
 Groq Whisper provides timestamps but not speaker diarization. The transcript uses `Speaker 1` and users can correct speaker names during the review step.
 
 To enable Fireflies imports, copy an API key from **Fireflies > Integrations > Fireflies API**, add it to Vercel as `FIREFLIES_API_KEY`, and redeploy. The key remains server-side. The importer accepts Fireflies transcript links and requests only the meeting title, participants, speaker names, timestamps, and transcript sentences.
-
-## Accounts and history
-
-Add `DATABASE_URL` (your Supabase project's Postgres connection string, or any other Postgres host) to enable accounts. Once set:
-
-- The topbar shows **Sign in** and **Create account**. Sessions are stored server-side and tracked with a signed, HTTP-only cookie (`mccia_session`), so no token is ever exposed to client-side JavaScript.
-- Passwords are hashed with Node's built-in `scrypt` and a per-user random salt; plaintext passwords are never stored.
-- Every document you generate while signed in — minutes, reports, briefs, translations, executive versions, and attendee emails — is saved automatically, together with its source transcript, to your personal **History**.
-- Open **History** from the topbar to reopen or delete any saved document. Deleting a document removes it permanently.
-- Required tables (`users`, `sessions`, `documents`) are created automatically on first run; no manual migration step is needed.
-- Without `DATABASE_URL`, the app behaves exactly as before: fully usable, with no accounts, login, or history UI shown.
 
 ## Verify
 

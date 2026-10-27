@@ -11,20 +11,6 @@ import { combineGroqTranscriptions, firefliesTranscriptId, normalizeFirefliesTra
 import { createQuotaFallbackDocument } from "./lib/fallback-document.js";
 import { createDocumentPdf } from "./lib/pdf.js";
 import { AGENT_NAME, buildDocumentRequest, buildFollowupRequest, FOLLOWUP_SYSTEM_PROMPT, SYSTEM_PROMPT } from "./lib/prompts.js";
-import { ensureSchema, isConfigured as isAccountsConfigured } from "./lib/db.js";
-import {
-  authenticateUser,
-  clearedSessionCookieHeader,
-  createSession,
-  createUser,
-  deleteSession,
-  getRequestUser,
-  parseCookies,
-  requireUser,
-  SESSION_COOKIE,
-  sessionCookieHeader,
-} from "./lib/auth.js";
-import { deleteHistoryDocument, getHistoryDocument, listHistoryDocuments, saveHistoryDocument } from "./lib/history.js";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, "public");
@@ -701,109 +687,6 @@ async function generateDocumentFollowup(request, response) {
   }
 }
 
-function publicUser(user) {
-  return { id: user.id, email: user.email, name: user.name, createdAt: user.created_at };
-}
-
-async function handleSignup(request, response) {
-  const input = parseJsonBody(await readBody(request, 10 * 1024));
-  const user = await createUser({ email: input.email, name: input.name, password: input.password });
-  const session = await createSession(user.id);
-  response.setHeader("Set-Cookie", sessionCookieHeader(session.token, session.expiresAt));
-  sendJson(response, 201, { user: publicUser(user) });
-}
-
-async function handleLogin(request, response) {
-  const input = parseJsonBody(await readBody(request, 10 * 1024));
-  const user = await authenticateUser({ email: input.email, password: input.password });
-  const session = await createSession(user.id);
-  response.setHeader("Set-Cookie", sessionCookieHeader(session.token, session.expiresAt));
-  sendJson(response, 200, { user: publicUser(user) });
-}
-
-async function handleLogout(request, response) {
-  const token = parseCookies(request)[SESSION_COOKIE];
-  await deleteSession(token);
-  response.setHeader("Set-Cookie", clearedSessionCookieHeader());
-  sendJson(response, 200, { ok: true });
-}
-
-async function handleMe(request, response) {
-  if (!isAccountsConfigured()) {
-    sendJson(response, 200, { user: null });
-    return;
-  }
-  const user = await getRequestUser(request);
-  sendJson(response, 200, { user: user ? publicUser(user) : null });
-}
-
-async function handleListHistory(request, response) {
-  const user = requireUser(await getRequestUser(request));
-  const documents = await listHistoryDocuments(user.id);
-  sendJson(response, 200, {
-    documents: documents.map((row) => ({
-      id: row.id,
-      title: row.title,
-      documentType: row.document_type,
-      variant: row.variant,
-      outputLanguage: row.output_language,
-      model: row.model,
-      createdAt: row.created_at,
-    })),
-  });
-}
-
-async function handleSaveHistory(request, response) {
-  const user = requireUser(await getRequestUser(request));
-  const input = parseJsonBody(await readBody(request, 2 * 1024 * 1024));
-  if (!String(input.content || "").trim()) {
-    const error = new Error("There is no document content to save.");
-    error.status = 400;
-    throw error;
-  }
-  const saved = await saveHistoryDocument(user.id, input);
-  sendJson(response, 201, {
-    document: {
-      id: saved.id,
-      title: saved.title,
-      documentType: saved.document_type,
-      variant: saved.variant,
-      outputLanguage: saved.output_language,
-      model: saved.model,
-      createdAt: saved.created_at,
-    },
-  });
-}
-
-async function handleGetHistory(request, response, id) {
-  const user = requireUser(await getRequestUser(request));
-  const document = await getHistoryDocument(user.id, id);
-  if (!document) {
-    const error = new Error("This document was not found.");
-    error.status = 404;
-    throw error;
-  }
-  sendJson(response, 200, {
-    document: {
-      id: document.id,
-      title: document.title,
-      documentType: document.document_type,
-      variant: document.variant,
-      outputLanguage: document.output_language,
-      transcript: document.transcript,
-      content: document.content,
-      model: document.model,
-      createdAt: document.created_at,
-    },
-  });
-}
-
-async function handleDeleteHistory(request, response, id) {
-  const user = requireUser(await getRequestUser(request));
-  await deleteHistoryDocument(user.id, id);
-  sendJson(response, 200, { ok: true });
-}
-
 async function downloadPdf(request, response) {
   const input = parseJsonBody(await readBody(request, 1024 * 1024));
   const documentText = String(input?.document || "").trim();
@@ -859,7 +742,6 @@ const server = http.createServer(async (request, response) => {
         supabaseUrl: SUPABASE_URL,
         supabaseAnonKey: SUPABASE_ANON_KEY,
         firefliesConfigured: Boolean(process.env.FIREFLIES_API_KEY),
-        accountsConfigured: isAccountsConfigured(),
         agent: AGENT_NAME,
         provider: "Groq Whisper + Anthropic Claude",
         maxUploadMb: Math.round(MAX_UPLOAD_BYTES / 1024 / 1024),
@@ -893,38 +775,6 @@ const server = http.createServer(async (request, response) => {
       await downloadPdf(request, response);
       return;
     }
-    if (request.method === "POST" && url.pathname === "/api/auth/signup") {
-      await handleSignup(request, response);
-      return;
-    }
-    if (request.method === "POST" && url.pathname === "/api/auth/login") {
-      await handleLogin(request, response);
-      return;
-    }
-    if (request.method === "POST" && url.pathname === "/api/auth/logout") {
-      await handleLogout(request, response);
-      return;
-    }
-    if (request.method === "GET" && url.pathname === "/api/auth/me") {
-      await handleMe(request, response);
-      return;
-    }
-    if (request.method === "GET" && url.pathname === "/api/history") {
-      await handleListHistory(request, response);
-      return;
-    }
-    if (request.method === "POST" && url.pathname === "/api/history") {
-      await handleSaveHistory(request, response);
-      return;
-    }
-    if (request.method === "GET" && url.pathname.startsWith("/api/history/")) {
-      await handleGetHistory(request, response, url.pathname.slice("/api/history/".length));
-      return;
-    }
-    if (request.method === "DELETE" && url.pathname.startsWith("/api/history/")) {
-      await handleDeleteHistory(request, response, url.pathname.slice("/api/history/".length));
-      return;
-    }
     if (request.method === "GET" || request.method === "HEAD") {
       await serveStatic(request, response, url.pathname);
       return;
@@ -940,12 +790,7 @@ server.listen(PORT, () => {
   console.log(`${AGENT_NAME} is ready at http://localhost:${PORT}`);
   if (!process.env.ANTHROPIC_API_KEY) console.log("Add ANTHROPIC_API_KEY to .env to enable document generation.");
   if (!process.env.GROQ_API_KEY) console.log("Add GROQ_API_KEY to .env to enable transcription.");
-  if (!isAccountsConfigured()) console.log("Add DATABASE_URL to .env to enable accounts, login, and saved history.");
 });
-
-if (isAccountsConfigured()) {
-  ensureSchema().catch((error) => console.error("Failed to prepare the accounts database:", error.message));
-}
 
 async function loadLocalEnv(filePath) {
   try {
