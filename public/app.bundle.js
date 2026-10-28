@@ -55931,7 +55931,7 @@ The @mediabunny/mp3-encoder extension package provides support for encoding MP3.
       const fullyConfigured = Boolean(data.transcriptionConfigured && data.documentConfigured && data.storageConfigured);
       element.classList.toggle("ready", fullyConfigured);
       element.classList.toggle("error", !fullyConfigured);
-      element.querySelector("span:last-child").textContent = !data.transcriptionConfigured ? "Groq key needed" : !data.documentConfigured ? "Claude key needed" : !data.storageConfigured ? "Storage setup needed" : "Groq + Claude + storage ready";
+      element.querySelector("span:last-child").textContent = !data.transcriptionConfigured ? "Groq key needed" : !data.documentConfigured ? "AI key needed" : !data.storageConfigured ? "Storage setup needed" : `${data.provider?.includes("Free") ? "Groq (100% Free)" : "Groq + Claude"} + storage ready`;
     } catch {
       $("#api-status").classList.add("error");
       $("#api-status span:last-child").textContent = "Server unavailable";

@@ -571,10 +571,10 @@ async function checkHealth() {
     element.querySelector("span:last-child").textContent = !data.transcriptionConfigured
       ? "Groq key needed"
       : !data.documentConfigured
-        ? "Claude key needed"
+        ? "AI key needed"
         : !data.storageConfigured
           ? "Storage setup needed"
-          : "Groq + Claude + storage ready";
+          : `${data.provider?.includes("Free") ? "Groq (100% Free)" : "Groq + Claude"} + storage ready`;
   } catch {
     $("#api-status").classList.add("error");
     $("#api-status span:last-child").textContent = "Server unavailable";

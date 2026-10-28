@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "buildCommand": "npm run build",
+  "outputDirectory": "public",
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 60,
+      "includeFiles": "assets/**"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api"
+    },
+    {
+      "source": "/assets/(.*)",
+      "destination": "/api"
+    }
+  ]
+}
+

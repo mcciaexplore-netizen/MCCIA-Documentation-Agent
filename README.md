@@ -1,9 +1,10 @@
 # MCCIA Documentation Agent
 
-The MCCIA Documentation Agent is a Groq-powered multilingual documentation tool for the Mahratta Chamber of Commerce, Industries and Agriculture, using Groq Whisper for transcription and Claude for document generation. It turns Hindi, English, Marathi, and code-mixed recordings into grounded Chamber documents.
+The MCCIA Documentation Agent is a Groq-powered multilingual documentation tool for the Mahratta Chamber of Commerce, Industries and Agriculture, using **Groq Whisper for transcription** and **Groq Llama 3.3 70B for document generation** with **ZERO API cost ($0.00)**. It turns Hindi, English, Marathi, and code-mixed recordings into grounded Chamber documents. Anthropic Claude is also supported as an optional provider.
 
 ## Current MVP
 
+- **Zero API Cost ($0.00)**: Uses Groq's free tier for both audio transcription (Whisper Large V3 Turbo) and document intelligence (Llama 3.3 70B / Qwen 2.5)
 - Audio and video upload for MP3, M4A, WAV, WebM, OGG, FLAC, AAC, AIFF, Opus, MP4, MOV, and MKV
 - In-browser microphone recording with a live timer and playback preview
 - Groq Whisper Large V3 Turbo transcription with segment timestamps
@@ -13,7 +14,7 @@ The MCCIA Documentation Agent is a Groq-powered multilingual documentation tool 
 - MCCIA committee minutes, policy and event reports, leadership briefs, and template filling
 - English, Hindi, or Marathi document output
 - Markdown copy and download
-- Claude-powered generation for minutes, reports, summaries, and templates
+- Groq Llama 3.3 (or Claude) powered generation for minutes, reports, summaries, and templates
 - Fireflies meeting-link import with existing speaker names and sentence timestamps
 - Direct PDF download with multilingual Hindi, Marathi, and English fonts
 - One-click full-document translation into Hindi, Marathi, or English
@@ -24,10 +25,21 @@ The MCCIA Documentation Agent is a Groq-powered multilingual documentation tool 
 - Private recordings are converted and sent to Groq as valid audio chunks
 - Temporary private Storage uploads are deleted immediately after transcription
 
+## Deploy on Vercel
+
+1. Import this repository into Vercel.
+2. In the Vercel project settings under **Environment Variables**, add:
+   - `GROQ_API_KEY`: Your free Groq key from [console.groq.com](https://console.groq.com/keys) (powers both transcription and document generation for $0.00).
+   - `SUPABASE_URL`: Your Supabase Project URL.
+   - `SUPABASE_ANON_KEY`: Your Supabase anon public key.
+   - `SUPABASE_SERVICE_ROLE_KEY`: Your Supabase service role key (keep secure, server-side only).
+   - `SUPABASE_STORAGE_BUCKET`: `recordings` (private storage bucket).
+3. Click **Deploy**.
+
 ## Run locally
 
 1. Copy `.env.example` to `.env`.
-2. Add your Groq and Claude API keys, and a Supabase project's URL/keys, to `.env`.
+2. Add your Groq API key and Supabase project's URL/keys to `.env`.
 3. Run the build, then start the server:
 
    ```powershell
