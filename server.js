@@ -774,9 +774,10 @@ async function serveStatic(request, response, pathname) {
 
 export async function handleRequest(request, response) {
   const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
+  const pathname = url.pathname;
 
   try {
-    if (request.method === "GET" && url.pathname === "/api/health") {
+    if (request.method === "GET" && (pathname === "/api/health" || pathname === "/health")) {
       const transcriptionConfigured = Boolean(process.env.GROQ_API_KEY);
       const documentConfigured = DOCUMENT_PROVIDER === "anthropic"
         ? Boolean(process.env.ANTHROPIC_API_KEY)
@@ -805,27 +806,27 @@ export async function handleRequest(request, response) {
       });
       return;
     }
-    if (request.method === "POST" && url.pathname === "/api/uploads/storage-token") {
+    if (request.method === "POST" && (pathname === "/api/uploads/storage-token" || pathname === "/uploads/storage-token")) {
       await createStorageUploadToken(request, response);
       return;
     }
-    if (request.method === "POST" && url.pathname === "/api/transcribe") {
+    if (request.method === "POST" && (pathname === "/api/transcribe" || pathname === "/transcribe")) {
       await transcribeWithGroq(request, response);
       return;
     }
-    if (request.method === "POST" && url.pathname === "/api/import/fireflies") {
+    if (request.method === "POST" && (pathname === "/api/import/fireflies" || pathname === "/import/fireflies")) {
       await importFirefliesMeeting(request, response);
       return;
     }
-    if (request.method === "POST" && url.pathname === "/api/generate") {
+    if (request.method === "POST" && (pathname === "/api/generate" || pathname === "/generate")) {
       await generateDocument(request, response);
       return;
     }
-    if (request.method === "POST" && url.pathname === "/api/document/followup") {
+    if (request.method === "POST" && (pathname === "/api/document/followup" || pathname === "/document/followup")) {
       await generateDocumentFollowup(request, response);
       return;
     }
-    if (request.method === "POST" && url.pathname === "/api/pdf") {
+    if (request.method === "POST" && (pathname === "/api/pdf" || pathname === "/pdf")) {
       await downloadPdf(request, response);
       return;
     }
@@ -842,7 +843,8 @@ export async function handleRequest(request, response) {
 
 const server = http.createServer(handleRequest);
 
-if (process.env.VERCEL !== "1" && !process.env.NOW_REGION) {
+const isMainModule = Boolean(process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]));
+if (isMainModule && !process.env.VERCEL) {
   server.listen(PORT, () => {
     console.log(`${AGENT_NAME} is ready at http://localhost:${PORT}`);
     if (!process.env.GROQ_API_KEY) console.log("Add GROQ_API_KEY to .env to enable transcription & document generation (100% Free).");
