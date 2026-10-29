@@ -797,6 +797,7 @@ export async function handleRequest(request, response) {
           : "Groq Whisper + Groq Llama 3.3 (100% Free)",
         maxUploadMb: Math.round(MAX_UPLOAD_BYTES / 1024 / 1024),
         chunkMinutes: GROQ_CHUNK_SECONDS / 60,
+        anthropicWorkspaceId: ANTHROPIC_WORKSPACE_ID || null,
         models: {
           transcription: GROQ_TRANSCRIPTION_MODEL,
           document: ACTIVE_DOCUMENT_MODEL,
